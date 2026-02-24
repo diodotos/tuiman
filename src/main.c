@@ -11,6 +11,7 @@
 #include "tuiman/export_import.h"
 #include "tuiman/history_store.h"
 #include "tuiman/http_client.h"
+#include "tuiman/json_body.h"
 #include "tuiman/keychain_macos.h"
 #include "tuiman/paths.h"
 #include "tuiman/request_store.h"
@@ -145,6 +146,85 @@ static void line_append_char(char *buf, size_t cap, size_t *len, int ch) {
   buf[*len] = (char)ch;
   (*len)++;
   buf[*len] = '\0';
+}
+
+static int launch_editor_and_restore_tui(const char *initial_text, char *out, size_t out_len, const char *suffix) {
+  def_prog_mode();
+  endwin();
+
+  int rc = edit_text_with_editor(initial_text, out, out_len, suffix);
+
+  reset_prog_mode();
+  clearok(stdscr, TRUE);
+  refresh();
+  curs_set(0);
+  return rc;
+}
+
+static void draw_multiline_text(int start_y, int start_x, int max_lines, int max_width, const char *text) {
+  if (max_lines <= 0 || max_width <= 0 || text == NULL) {
+    return;
+  }
+
+  const char *line = text;
+  for (int i = 0; i < max_lines && line[0] != '\0'; i++) {
+    const char *nl = strchr(line, '\n');
+    size_t raw_len = nl ? (size_t)(nl - line) : strlen(line);
+    if (raw_len > 0 && line[raw_len - 1] == '\r') {
+      raw_len--;
+    }
+
+    int print_len = (int)raw_len;
+    if (print_len > max_width) {
+      print_len = max_width;
+    }
+
+    mvprintw(start_y + i, start_x, "%.*s", print_len, line);
+
+    if (nl == NULL) {
+      break;
+    }
+    line = nl + 1;
+  }
+}
+
+static int should_treat_body_as_json(const char *body) {
+  if (body == NULL) {
+    return 0;
+  }
+
+  const char *p = body;
+  while (*p != '\0' && isspace((unsigned char)*p)) {
+    p++;
+  }
+
+  if (*p == '\0') {
+    return 0;
+  }
+
+  return *p == '{' || *p == '[';
+}
+
+static int apply_body_edit_result(app_t *app, const char *edited, char *dest, size_t dest_len,
+                                  const char *plain_success, const char *json_success) {
+  if (!should_treat_body_as_json(edited)) {
+    snprintf(dest, dest_len, "%s", edited);
+    set_status(app, plain_success);
+    return 0;
+  }
+
+  char formatted[TUIMAN_BODY_LEN];
+  char error_message[256];
+  if (json_body_validate_and_pretty(edited, formatted, sizeof(formatted), error_message, sizeof(error_message)) != 0) {
+    char status[STATUS_MAX];
+    snprintf(status, sizeof(status), "Invalid JSON: %s", error_message[0] ? error_message : "parse error");
+    set_status(app, status);
+    return -1;
+  }
+
+  snprintf(dest, dest_len, "%s", formatted);
+  set_status(app, json_success);
+  return 0;
 }
 
 static int contains_case_insensitive(const char *haystack, const char *needle) {
@@ -354,19 +434,11 @@ static void draw_main(app_t *app) {
     mvprintw(6, rx, "Body:");
 
     int y = 7;
-    const char *body = selected->body;
     int max_body_lines = (h - 1) - y - 7;
     if (max_body_lines < 3) {
       max_body_lines = 3;
     }
-    for (int line = 0; line < max_body_lines && body[0] != '\0'; line++) {
-      mvprintw(y + line, rx, "%.*s", rw, body);
-      const char *nl = strchr(body, '\n');
-      if (nl == NULL) {
-        break;
-      }
-      body = nl + 1;
-    }
+    draw_multiline_text(y, rx, max_body_lines, rw, selected->body);
 
     mvprintw(h - 8, rx, "Last Response:");
     if (strcmp(app->last_response_request_id, selected->id) == 0) {
@@ -375,7 +447,7 @@ static void draw_main(app_t *app) {
       } else {
         mvprintw(h - 7, rx, "status=%ld duration=%ldms", app->last_response_status, app->last_response_ms);
       }
-      mvprintw(h - 6, rx, "%.*s", rw, app->last_response_body);
+      draw_multiline_text(h - 6, rx, 2, rw, app->last_response_body);
     } else {
       mvprintw(h - 7, rx, "No response yet");
     }
@@ -637,19 +709,11 @@ static void draw_new_editor(app_t *app) {
   mvprintw(6, rx, "secret_ref=%.*s", secret_w, app->draft.auth_secret_ref);
   mvprintw(8, rx, "Body preview:");
 
-  const char *body = app->draft.body;
   int max_lines = h - 12;
   if (max_lines < 2) {
     max_lines = 2;
   }
-  for (int i = 0; i < max_lines && body[0] != '\0'; i++) {
-    mvprintw(9 + i, rx, "%.*s", rw, body);
-    const char *nl = strchr(body, '\n');
-    if (nl == NULL) {
-      break;
-    }
-    body = nl + 1;
-  }
+  draw_multiline_text(9, rx, max_lines, rw, app->draft.body);
 
   move(h - 1, 0);
   clrtoeol();
@@ -930,11 +994,12 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
     }
     if (ch == 'e' && selected != NULL) {
       char edited[TUIMAN_BODY_LEN];
-      if (edit_text_with_editor(selected->body, edited, sizeof(edited), ".txt") == 0) {
-        snprintf(selected->body, sizeof(selected->body), "%s", edited);
-        request_store_save(&app->paths, selected);
-        load_requests(app, selected->id);
-        set_status(app, "Body updated");
+      if (launch_editor_and_restore_tui(selected->body, edited, sizeof(edited), ".txt") == 0) {
+        if (apply_body_edit_result(app, edited, selected->body, sizeof(selected->body), "Body updated",
+                                   "Body updated (JSON formatted)") == 0) {
+          request_store_save(&app->paths, selected);
+          load_requests(app, selected->id);
+        }
       } else {
         set_status(app, "Body edit cancelled or failed");
       }
@@ -1191,9 +1256,9 @@ static void handle_new_key(app_t *app, int ch) {
   }
   if (ch == 'e') {
     char edited[TUIMAN_BODY_LEN];
-    if (edit_text_with_editor(app->draft.body, edited, sizeof(edited), ".json") == 0) {
-      snprintf(app->draft.body, sizeof(app->draft.body), "%s", edited);
-      set_status(app, "Draft body updated");
+    if (launch_editor_and_restore_tui(app->draft.body, edited, sizeof(edited), ".json") == 0) {
+      apply_body_edit_result(app, edited, app->draft.body, sizeof(app->draft.body), "Draft body updated",
+                             "Draft body updated (JSON formatted)");
     } else {
       set_status(app, "Body edit cancelled or failed");
     }

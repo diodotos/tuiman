@@ -20,6 +20,9 @@
 - `src/main.c`
   - Event loop, mode/screen state machine, rendering.
   - Main screen, new-request editor screen, history screen, help screen.
+  - Body-edit JSON validation/formatting integration.
+- `src/core/json_body_macos.m`
+  - macOS JSON parse + pretty formatting using Foundation.
 - `src/store/request_store.c`
   - Request JSON read/write/list/delete.
 - `src/store/history_store.c`

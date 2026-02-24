@@ -19,6 +19,8 @@ Action row (`Enter` from main):
 
 - `y`: send selected request.
 - `e`: edit request body in `$VISUAL`/`$EDITOR`.
+  - If body starts with `{` or `[`, `tuiman` validates JSON and pretty-formats on save.
+  - Invalid JSON is rejected with an inline error and the previous body is kept.
 - `a`: open selected request in auth-focused editor.
 - `Esc` or `n`: cancel action row.
 

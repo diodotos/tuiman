@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(tuiman VERSION 0.1.0 LANGUAGES C)
 
+if(APPLE)
+  enable_language(OBJC)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -20,6 +24,10 @@ add_executable(tuiman
   src/auth/keychain_macos.c
 )
 
+if(APPLE)
+  target_sources(tuiman PRIVATE src/core/json_body_macos.m)
+endif()
+
 target_include_directories(tuiman PRIVATE
   include
   ${CURSES_INCLUDE_DIR}
@@ -33,6 +41,7 @@ target_link_libraries(tuiman PRIVATE
 
 if(APPLE)
   target_compile_definitions(tuiman PRIVATE TUIMAN_PLATFORM_MACOS=1)
+  target_link_libraries(tuiman PRIVATE "-framework Foundation")
 endif()
 
 install(TARGETS tuiman DESTINATION bin)

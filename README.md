@@ -11,6 +11,7 @@ This is the fresh C rewrite (macOS-first) with:
 - Split-pane TUI (`ncurses`) with vim-like modes.
 - Request definitions stored as JSON files.
 - Request delete from main list with confirmation.
+- Body edits validate JSON and auto-format valid JSON.
 - HTTP execution with `libcurl`.
 - History persistence with `sqlite3`.
 - macOS Keychain-backed secrets via `security` CLI.
