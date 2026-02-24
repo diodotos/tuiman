@@ -9,6 +9,7 @@ It is intentionally keyboard-only and modeled after terminal workflows used by t
 This is the fresh C rewrite (macOS-first) with:
 
 - Split-pane TUI (`ncurses`) with vim-like modes.
+- Main top split (request list + request preview) plus bottom response pane.
 - Request definitions stored as JSON files.
 - Request delete from main list with confirmation.
 - Body edits validate JSON and auto-format valid JSON.

@@ -24,6 +24,11 @@ Action row (`Enter` from main):
 - `a`: open selected request in auth-focused editor.
 - `Esc` or `n`: cancel action row.
 
+Response pane notes:
+
+- Response pane updates after `y` send.
+- Shows request/method/url, timestamp, status, duration, error (if any), and wrapped body preview.
+
 Delete confirmation prompt:
 
 - `y`: confirm delete.

@@ -21,6 +21,9 @@
   - Event loop, mode/screen state machine, rendering.
   - Main screen, new-request editor screen, history screen, help screen.
   - Body-edit JSON validation/formatting integration.
+  - Main split view uses isolated ncurses windows per pane.
+  - Main view has a dedicated bottom response pane with metadata + body preview.
+  - Preview/response text uses internal wrapping logic (not terminal auto-wrap).
 - `src/core/json_body_macos.m`
   - macOS JSON parse + pretty formatting using Foundation.
 - `src/store/request_store.c`
@@ -53,7 +56,8 @@ New request editor modes:
 
 ## Screen model
 
-- Main split view: request list + preview + bottom status/cmdline.
+- Main split view: request list + request preview (top), response pane (bottom), status/cmdline (last row).
+- Main split view reflows by terminal width and can temporarily hide request preview when too narrow.
 - New request editor: field list + preview + vim-like bottom command line.
 - History: run list + run details.
 - Help: key/command quick reference.

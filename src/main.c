@@ -2,6 +2,7 @@
 #include <ncurses.h>
 #include <sqlite3.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +81,10 @@ typedef struct {
   size_t draft_cmdline_len;
 
   char last_response_request_id[TUIMAN_ID_LEN];
+  char last_response_request_name[TUIMAN_NAME_LEN];
+  char last_response_method[TUIMAN_METHOD_LEN];
+  char last_response_url[TUIMAN_URL_LEN];
+  char last_response_at[40];
   long last_response_status;
   long last_response_ms;
   char last_response_error[256];
@@ -92,6 +97,14 @@ enum {
   COLOR_PUT = 3,
   COLOR_PATCH = 4,
   COLOR_DELETE = 5,
+  COLOR_STATUS_2XX = 6,
+  COLOR_STATUS_3XX = 7,
+  COLOR_STATUS_4XX = 8,
+  COLOR_STATUS_5XX = 9,
+  COLOR_JSON_STRING = 10,
+  COLOR_JSON_NUMBER = 11,
+  COLOR_JSON_PUNCT = 12,
+  COLOR_JSON_BRACE = 13,
 };
 
 enum {
@@ -161,6 +174,239 @@ static int launch_editor_and_restore_tui(const char *initial_text, char *out, si
   return rc;
 }
 
+static void pane_add_text(int y, int x, int pane_right_exclusive, const char *text) {
+  int h = 0;
+  int w = 0;
+  getmaxyx(stdscr, h, w);
+
+  if (text == NULL || y < 0 || y >= h) {
+    return;
+  }
+
+  if (x < 0) {
+    x = 0;
+  }
+
+  int right = pane_right_exclusive;
+  if (right > w) {
+    right = w;
+  }
+
+  if (right <= x) {
+    return;
+  }
+
+  int max_len = right - x;
+  int len = 0;
+  while (text[len] != '\0' && text[len] != '\n' && text[len] != '\r' && len < max_len) {
+    len++;
+  }
+
+  move(y, x);
+  addnstr(text, len);
+}
+
+static void pane_printf_text(int y, int x, int pane_right_exclusive, const char *fmt, ...) {
+  char buffer[2048];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  pane_add_text(y, x, pane_right_exclusive, buffer);
+}
+
+static void win_add_text(WINDOW *win, int y, int x, const char *text) {
+  if (win == NULL || text == NULL) {
+    return;
+  }
+
+  int h = 0;
+  int w = 0;
+  getmaxyx(win, h, w);
+  if (y < 0 || y >= h) {
+    return;
+  }
+
+  if (x < 0) {
+    x = 0;
+  }
+  if (x >= w) {
+    return;
+  }
+
+  int max_len = w - x;
+  int len = 0;
+  while (text[len] != '\0' && text[len] != '\n' && text[len] != '\r' && len < max_len) {
+    len++;
+  }
+
+  mvwaddnstr(win, y, x, text, len);
+}
+
+static void win_printf_text(WINDOW *win, int y, int x, const char *fmt, ...) {
+  char buffer[2048];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  win_add_text(win, y, x, buffer);
+}
+
+static void win_draw_wrapped_text(WINDOW *win, int start_y, int start_x, int max_lines, int max_width,
+                                  const char *text) {
+  if (win == NULL || text == NULL || max_lines <= 0 || max_width <= 0) {
+    return;
+  }
+
+  int wh = 0;
+  int ww = 0;
+  getmaxyx(win, wh, ww);
+  if (start_x < 0) {
+    start_x = 0;
+  }
+  if (start_x >= ww || start_y >= wh) {
+    return;
+  }
+
+  int width = max_width;
+  if (width > ww - start_x) {
+    width = ww - start_x;
+  }
+  if (width <= 0) {
+    return;
+  }
+
+  const char *p = text;
+  for (int row = 0; row < max_lines; row++) {
+    int y = start_y + row;
+    if (y < 0 || y >= wh) {
+      break;
+    }
+    if (*p == '\0') {
+      break;
+    }
+
+    while (*p == '\r') {
+      p++;
+    }
+
+    int len = 0;
+    while (p[len] != '\0' && p[len] != '\n' && p[len] != '\r' && len < width) {
+      len++;
+    }
+
+    if (len > 0) {
+      mvwaddnstr(win, y, start_x, p, len);
+      p += len;
+    }
+
+    if (*p == '\r') {
+      p++;
+      if (*p == '\n') {
+        p++;
+      }
+    } else if (*p == '\n') {
+      p++;
+    }
+  }
+}
+
+static void win_draw_wrapped_jsonish(WINDOW *win, int start_y, int start_x, int max_lines, int max_width,
+                                     const char *text, int colorize_json) {
+  if (win == NULL || text == NULL || max_lines <= 0 || max_width <= 0) {
+    return;
+  }
+
+  int wh = 0;
+  int ww = 0;
+  getmaxyx(win, wh, ww);
+  if (start_x < 0) {
+    start_x = 0;
+  }
+  if (start_x >= ww || start_y >= wh) {
+    return;
+  }
+
+  int width = max_width;
+  if (width > ww - start_x) {
+    width = ww - start_x;
+  }
+  if (width <= 0) {
+    return;
+  }
+
+  const char *p = text;
+  int in_string = 0;
+  int escaped = 0;
+
+  for (int row = 0; row < max_lines; row++) {
+    int y = start_y + row;
+    if (y < 0 || y >= wh) {
+      break;
+    }
+    if (*p == '\0') {
+      break;
+    }
+
+    while (*p == '\r') {
+      p++;
+    }
+
+    int col = 0;
+    while (*p != '\0' && *p != '\n' && *p != '\r' && col < width) {
+      char c = *p;
+      int pair = 0;
+
+      if (colorize_json) {
+        if (in_string) {
+          pair = COLOR_JSON_STRING;
+          if (escaped) {
+            escaped = 0;
+          } else if (c == '\\') {
+            escaped = 1;
+          } else if (c == '"') {
+            in_string = 0;
+          }
+        } else {
+          if (c == '"') {
+            pair = COLOR_JSON_STRING;
+            in_string = 1;
+            escaped = 0;
+          } else if (c == '{' || c == '}' || c == '[' || c == ']') {
+            pair = COLOR_JSON_BRACE;
+          } else if (c == ':' || c == ',') {
+            pair = COLOR_JSON_PUNCT;
+          } else if (isdigit((unsigned char)c) || c == '-') {
+            pair = COLOR_JSON_NUMBER;
+          } else if (c == 't' || c == 'f' || c == 'n') {
+            pair = COLOR_JSON_NUMBER;
+          }
+        }
+      }
+
+      if (pair != 0 && has_colors()) {
+        wattron(win, COLOR_PAIR(pair));
+      }
+      mvwaddch(win, y, start_x + col, (chtype)c);
+      if (pair != 0 && has_colors()) {
+        wattroff(win, COLOR_PAIR(pair));
+      }
+
+      p++;
+      col++;
+    }
+
+    if (*p == '\r') {
+      p++;
+      if (*p == '\n') {
+        p++;
+      }
+    } else if (*p == '\n') {
+      p++;
+    }
+  }
+}
+
 static void draw_multiline_text(int start_y, int start_x, int max_lines, int max_width, const char *text) {
   if (max_lines <= 0 || max_width <= 0 || text == NULL) {
     return;
@@ -179,7 +425,10 @@ static void draw_multiline_text(int start_y, int start_x, int max_lines, int max
       print_len = max_width;
     }
 
-    mvprintw(start_y + i, start_x, "%.*s", print_len, line);
+    int pane_right = start_x + max_width;
+    if (print_len > 0) {
+      pane_add_text(start_y + i, start_x, pane_right, line);
+    }
 
     if (nl == NULL) {
       break;
@@ -336,27 +585,126 @@ static int method_color_pair(const char *method) {
   return 0;
 }
 
+static int status_color_pair(long status_code) {
+  if (status_code >= 200 && status_code < 300) {
+    return COLOR_STATUS_2XX;
+  }
+  if (status_code >= 300 && status_code < 400) {
+    return COLOR_STATUS_3XX;
+  }
+  if (status_code >= 400 && status_code < 500) {
+    return COLOR_STATUS_4XX;
+  }
+  if (status_code >= 500) {
+    return COLOR_STATUS_5XX;
+  }
+  return 0;
+}
+
 static void draw_main(app_t *app) {
   int h = 0;
   int w = 0;
   getmaxyx(stdscr, h, w);
-  int list_h = h - 1;
-  int left_w = (w * 2) / 3;
-  if (left_w < 30) {
-    left_w = w / 2;
+
+  int status_h = 1;
+  int available_h = h - status_h;
+  if (available_h < 3 || w < 24) {
+    erase();
+    mvprintw(h - 1, 0, "Window too small");
+    refresh();
+    return;
+  }
+
+  int response_h = 0;
+  if (available_h >= 14) {
+    response_h = 8;
+  } else if (available_h >= 10) {
+    response_h = 5;
+  }
+
+  int horizontal_sep_y = -1;
+  if (response_h > 0) {
+    horizontal_sep_y = available_h - response_h - 1;
+    if (horizontal_sep_y < 4) {
+      response_h = 0;
+      horizontal_sep_y = -1;
+    }
+  }
+
+  int top_h = response_h > 0 ? horizontal_sep_y : available_h;
+  int response_y = response_h > 0 ? horizontal_sep_y + 1 : -1;
+  if (top_h < 2) {
+    erase();
+    mvprintw(h - 1, 0, "Window too small");
+    refresh();
+    return;
+  }
+
+  int left_w = w;
+  int separator_x = -1;
+  int rx = 0;
+  int rw = 0;
+  int show_right = 0;
+
+  if (w >= 58) {
+    left_w = (w * 2) / 3;
+    if (left_w < 24) {
+      left_w = 24;
+    }
+    if (left_w > w - 18) {
+      left_w = w - 18;
+    }
+
+    separator_x = left_w;
+    rx = separator_x + 1;
+    rw = w - rx;
+    if (rw >= 20) {
+      show_right = 1;
+    } else {
+      left_w = w;
+      separator_x = -1;
+      rx = 0;
+      rw = 0;
+    }
   }
 
   erase();
 
-  mvprintw(0, 1, "Name");
-  mvprintw(0, left_w / 2, "Type");
-  mvprintw(0, left_w / 2 + 8, "URL");
-
-  for (int y = 0; y < list_h; y++) {
-    mvaddch(y, left_w, ACS_VLINE);
+  WINDOW *left_win = newwin(top_h, left_w, 0, 0);
+  WINDOW *right_win = NULL;
+  if (show_right) {
+    right_win = newwin(top_h, rw, 0, rx);
+  }
+  WINDOW *response_win = NULL;
+  if (response_h > 0) {
+    response_win = newwin(response_h, w, response_y, 0);
   }
 
-  int view_rows = list_h - 1;
+  if (left_win == NULL) {
+    mvprintw(h - 1, 0, "Failed to create list pane");
+    refresh();
+    return;
+  }
+
+  werase(left_win);
+  if (right_win != NULL) {
+    werase(right_win);
+  }
+  if (response_win != NULL) {
+    werase(response_win);
+  }
+
+  int method_x = left_w / 2;
+  if (method_x < 8) {
+    method_x = 8;
+  }
+  int url_x = method_x + 8;
+
+  win_add_text(left_win, 0, 1, "Name");
+  win_add_text(left_win, 0, method_x, "Type");
+  win_add_text(left_win, 0, url_x, "URL");
+
+  int view_rows = top_h - 1;
   if (view_rows < 1) {
     view_rows = 1;
   }
@@ -379,77 +727,156 @@ static void draw_main(app_t *app) {
     int y = row + 1;
 
     if (visible_index == app->selected_visible) {
-      attron(A_REVERSE);
-      mvhline(y, 0, ' ', left_w);
+      wattron(left_win, A_REVERSE);
+      mvwhline(left_win, y, 0, ' ', left_w);
     }
 
-    mvprintw(y, 1, "%-28.28s", req->name);
+    win_printf_text(left_win, y, 1, "%-28.28s", req->name);
     int pair = method_color_pair(req->method);
     if (pair != 0 && has_colors()) {
-      attron(COLOR_PAIR(pair));
+      wattron(left_win, COLOR_PAIR(pair));
     }
-    mvprintw(y, left_w / 2, "%-6.6s", req->method);
+    win_printf_text(left_win, y, method_x, "%-6.6s", req->method);
     if (pair != 0 && has_colors()) {
-      attroff(COLOR_PAIR(pair));
+      wattroff(left_win, COLOR_PAIR(pair));
     }
 
-    int url_space = left_w - (left_w / 2 + 9) - 1;
-    if (url_space < 4) {
-      url_space = 4;
+    int url_space = left_w - (url_x + 1);
+    if (url_space > 0) {
+      win_printf_text(left_win, y, url_x, "%-*.*s", url_space, url_space, req->url);
     }
-    mvprintw(y, left_w / 2 + 8, "%-*.*s", url_space, url_space, req->url);
 
     if (visible_index == app->selected_visible) {
-      attroff(A_REVERSE);
+      wattroff(left_win, A_REVERSE);
     }
   }
 
-  int rx = left_w + 2;
-  int rw = w - rx - 1;
-  if (rw < 10) {
-    rw = 10;
+  if (app->visible_len == 0) {
+    win_add_text(left_win, 1, 1, "(empty)");
+    win_add_text(left_win, 2, 1, "Use :new [METHOD] [URL]");
   }
 
-  request_t *selected = selected_request(app);
-  if (selected == NULL) {
-    mvprintw(1, rx, "No requests. Use :new to create one.");
-  } else {
-    int url_w = rw - 10;
-    int auth_w = rw - 6;
-    int header_val_w = rw - 30;
-    if (url_w < 4) {
-      url_w = 4;
+  if (right_win != NULL) {
+    request_t *selected = selected_request(app);
+    win_add_text(right_win, 0, 0, "Request Preview");
+    if (has_colors()) {
+      wattron(right_win, COLOR_PAIR(COLOR_JSON_PUNCT));
     }
-    if (auth_w < 4) {
-      auth_w = 4;
-    }
-    if (header_val_w < 1) {
-      header_val_w = 1;
+    mvwhline(right_win, 1, 0, ACS_HLINE, rw);
+    if (has_colors()) {
+      wattroff(right_win, COLOR_PAIR(COLOR_JSON_PUNCT));
     }
 
-    mvprintw(1, rx, "%.*s", rw, selected->name);
-    mvprintw(2, rx, "%.*s %.*s", 8, selected->method, url_w, selected->url);
-    mvprintw(3, rx, "auth=%.*s", auth_w, selected->auth_type[0] ? selected->auth_type : "none");
-    mvprintw(4, rx, "header=%.*s: %.*s", 20, selected->header_key, header_val_w, selected->header_value);
-    mvprintw(6, rx, "Body:");
-
-    int y = 7;
-    int max_body_lines = (h - 1) - y - 7;
-    if (max_body_lines < 3) {
-      max_body_lines = 3;
-    }
-    draw_multiline_text(y, rx, max_body_lines, rw, selected->body);
-
-    mvprintw(h - 8, rx, "Last Response:");
-    if (strcmp(app->last_response_request_id, selected->id) == 0) {
-      if (app->last_response_error[0] != '\0') {
-        mvprintw(h - 7, rx, "error=%.*s", rw - 7, app->last_response_error);
-      } else {
-        mvprintw(h - 7, rx, "status=%ld duration=%ldms", app->last_response_status, app->last_response_ms);
-      }
-      draw_multiline_text(h - 6, rx, 2, rw, app->last_response_body);
+    if (selected == NULL) {
+      win_draw_wrapped_text(right_win, 2, 0, top_h - 2, rw, "No requests. Use :new to create one.");
     } else {
-      mvprintw(h - 7, rx, "No response yet");
+      int url_w = rw - 10;
+      int auth_w = rw - 6;
+      int header_val_w = rw - 30;
+      if (url_w < 4) {
+        url_w = 4;
+      }
+      if (auth_w < 4) {
+        auth_w = 4;
+      }
+      if (header_val_w < 1) {
+        header_val_w = 1;
+      }
+
+      int method_pair = method_color_pair(selected->method);
+      if (method_pair != 0 && has_colors()) {
+        wattron(right_win, COLOR_PAIR(method_pair));
+      }
+      win_printf_text(right_win, 2, 0, "%.*s", 8, selected->method);
+      if (method_pair != 0 && has_colors()) {
+        wattroff(right_win, COLOR_PAIR(method_pair));
+      }
+      win_printf_text(right_win, 2, 6, "%.*s", url_w, selected->url);
+      win_printf_text(right_win, 3, 0, "auth=%.*s", auth_w, selected->auth_type[0] ? selected->auth_type : "none");
+
+      if (selected->header_key[0] == '\0' && selected->header_value[0] == '\0') {
+        win_add_text(right_win, 4, 0, "headers=none");
+      } else {
+        win_printf_text(right_win, 4, 0, "header=%.*s: %.*s", 20, selected->header_key, header_val_w,
+                        selected->header_value);
+      }
+      win_add_text(right_win, 6, 0, "Body:");
+
+      int body_start = 7;
+      int body_lines = top_h - body_start;
+      if (body_lines > 0) {
+        int colorize_json = should_treat_body_as_json(selected->body);
+        win_draw_wrapped_jsonish(right_win, body_start, 0, body_lines, rw, selected->body, colorize_json);
+      }
+    }
+  } else {
+    win_add_text(left_win, 1, 1, "Preview hidden (window too narrow)");
+    win_add_text(left_win, 2, 1, "Widen terminal to restore split-pane view.");
+  }
+
+  if (show_right) {
+    for (int y = 0; y < top_h; y++) {
+      mvaddch(y, separator_x, ACS_VLINE);
+    }
+  }
+
+  if (response_win != NULL) {
+    win_add_text(response_win, 0, 0, "Response");
+    if (has_colors()) {
+      wattron(response_win, COLOR_PAIR(COLOR_JSON_PUNCT));
+    }
+    mvwhline(response_win, 1, 0, ACS_HLINE, w);
+    if (has_colors()) {
+      wattroff(response_win, COLOR_PAIR(COLOR_JSON_PUNCT));
+    }
+
+    if (app->last_response_at[0] == '\0') {
+      win_add_text(response_win, 2, 0, "No response yet. Select a request, press Enter, then y.");
+    } else {
+      win_printf_text(response_win, 2, 0, "%s %s", app->last_response_method, app->last_response_url);
+      win_printf_text(response_win, 3, 0, "request=%s", app->last_response_request_name);
+      win_printf_text(response_win, 4, 0, "at=%s", app->last_response_at);
+
+      wmove(response_win, 5, 0);
+      waddstr(response_win, "status=");
+      int s_pair = status_color_pair(app->last_response_status);
+      if (s_pair != 0 && has_colors()) {
+        wattron(response_win, COLOR_PAIR(s_pair));
+      }
+      wprintw(response_win, "%ld", app->last_response_status);
+      if (s_pair != 0 && has_colors()) {
+        wattroff(response_win, COLOR_PAIR(s_pair));
+      }
+      wprintw(response_win, "  duration=%ldms", app->last_response_ms);
+
+      int body_row = 6;
+      if (app->last_response_error[0] != '\0' && body_row < response_h) {
+        if (has_colors()) {
+          wattron(response_win, COLOR_PAIR(COLOR_STATUS_5XX));
+        }
+        win_printf_text(response_win, body_row, 0, "error=%s", app->last_response_error);
+        if (has_colors()) {
+          wattroff(response_win, COLOR_PAIR(COLOR_STATUS_5XX));
+        }
+        body_row++;
+      }
+
+      if (body_row < response_h) {
+        win_add_text(response_win, body_row, 0, "Body:");
+        body_row++;
+      }
+      if (body_row < response_h) {
+        int lines = response_h - body_row;
+        int colorize_json = should_treat_body_as_json(app->last_response_body);
+        win_draw_wrapped_jsonish(response_win, body_row, 0, lines, w, app->last_response_body, colorize_json);
+      }
+    }
+  }
+
+  if (horizontal_sep_y >= 0) {
+    mvhline(horizontal_sep_y, 0, ACS_HLINE, w);
+    if (show_right && separator_x >= 0 && separator_x < w) {
+      mvaddch(horizontal_sep_y, separator_x, ACS_PLUS);
     }
   }
 
@@ -484,8 +911,26 @@ static void draw_main(app_t *app) {
     mvprintw(h - 1, 0, "%.*s", w - 1, app->status);
   }
 
-  refresh();
+  wnoutrefresh(stdscr);
+  wnoutrefresh(left_win);
+  if (right_win != NULL) {
+    wnoutrefresh(right_win);
+  }
+  if (response_win != NULL) {
+    wnoutrefresh(response_win);
+  }
+
+  doupdate();
+
+  delwin(left_win);
+  if (right_win != NULL) {
+    delwin(right_win);
+  }
+  if (response_win != NULL) {
+    delwin(response_win);
+  }
 }
+
 
 static void draw_help(void) {
   int h = 0;
@@ -738,8 +1183,14 @@ static void draw_new_editor(app_t *app) {
 static int send_request_and_record(app_t *app, request_t *req) {
   http_response_t response;
   int rc = http_send_request(req, &response);
+  char now[40];
+  now_iso(now);
 
   snprintf(app->last_response_request_id, sizeof(app->last_response_request_id), "%s", req->id);
+  snprintf(app->last_response_request_name, sizeof(app->last_response_request_name), "%s", req->name);
+  snprintf(app->last_response_method, sizeof(app->last_response_method), "%s", req->method);
+  snprintf(app->last_response_url, sizeof(app->last_response_url), "%s", req->url);
+  snprintf(app->last_response_at, sizeof(app->last_response_at), "%s", now);
   app->last_response_status = response.status_code;
   app->last_response_ms = response.duration_ms;
   snprintf(app->last_response_error, sizeof(app->last_response_error), "%s", response.error);
@@ -1314,11 +1765,20 @@ static void init_colors(void) {
     return;
   }
   start_color();
+  use_default_colors();
   init_pair(COLOR_GET, COLOR_GREEN, COLOR_BLACK);
   init_pair(COLOR_POST, COLOR_YELLOW, COLOR_BLACK);
   init_pair(COLOR_PUT, COLOR_CYAN, COLOR_BLACK);
   init_pair(COLOR_PATCH, COLOR_MAGENTA, COLOR_BLACK);
   init_pair(COLOR_DELETE, COLOR_RED, COLOR_BLACK);
+  init_pair(COLOR_STATUS_2XX, COLOR_GREEN, COLOR_BLACK);
+  init_pair(COLOR_STATUS_3XX, COLOR_CYAN, COLOR_BLACK);
+  init_pair(COLOR_STATUS_4XX, COLOR_YELLOW, COLOR_BLACK);
+  init_pair(COLOR_STATUS_5XX, COLOR_RED, COLOR_BLACK);
+  init_pair(COLOR_JSON_STRING, COLOR_YELLOW, COLOR_BLACK);
+  init_pair(COLOR_JSON_NUMBER, COLOR_CYAN, COLOR_BLACK);
+  init_pair(COLOR_JSON_PUNCT, COLOR_BLUE, COLOR_BLACK);
+  init_pair(COLOR_JSON_BRACE, COLOR_MAGENTA, COLOR_BLACK);
 }
 
 int main(void) {

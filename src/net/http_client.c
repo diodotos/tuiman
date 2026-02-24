@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "tuiman/keychain_macos.h"
 
@@ -41,6 +42,23 @@ static int append_query_param(const char *url, const char *key, const char *valu
   return 0;
 }
 
+static int is_jsonish_body(const char *body) {
+  if (body == NULL) {
+    return 0;
+  }
+  while (*body != '\0' && (*body == ' ' || *body == '\t' || *body == '\n' || *body == '\r')) {
+    body++;
+  }
+  return *body == '{' || *body == '[';
+}
+
+static int has_content_type_header(const request_t *req) {
+  if (req->header_key[0] == '\0') {
+    return 0;
+  }
+  return strcasecmp(req->header_key, "Content-Type") == 0;
+}
+
 int http_client_global_init(void) {
   return curl_global_init(CURL_GLOBAL_DEFAULT) == 0 ? 0 : -1;
 }
@@ -69,6 +87,11 @@ int http_send_request(const request_t *req, http_response_t *out) {
     char line[TUIMAN_HEADER_KEY_LEN + TUIMAN_HEADER_VAL_LEN + 8];
     snprintf(line, sizeof(line), "%s: %s", req->header_key, req->header_value);
     headers = curl_slist_append(headers, line);
+  }
+
+  if (req->body[0] != '\0' && is_jsonish_body(req->body) && !has_content_type_header(req)) {
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "Accept: application/json");
   }
 
   if ((strcmp(req->auth_type, "bearer") == 0 || strcmp(req->auth_type, "jwt") == 0) &&
