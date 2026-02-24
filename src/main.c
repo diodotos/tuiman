@@ -18,6 +18,7 @@
 #define CMDLINE_MAX 256
 #define STATUS_MAX 512
 #define PREVIEW_MAX 2048
+#define DEFAULT_MAIN_STATUS "j/k move | / search | : command | Enter actions | d delete"
 
 typedef enum {
   SCREEN_MAIN = 0,
@@ -32,6 +33,7 @@ typedef enum {
   MAIN_MODE_SEARCH = 2,
   MAIN_MODE_REVERSE = 3,
   MAIN_MODE_COMMAND = 4,
+  MAIN_MODE_DELETE_CONFIRM = 5,
 } main_mode_t;
 
 typedef enum {
@@ -64,6 +66,9 @@ typedef struct {
   size_t cmdline_len;
 
   char status[STATUS_MAX];
+
+  char delete_confirm_id[TUIMAN_ID_LEN];
+  char delete_confirm_name[TUIMAN_NAME_LEN];
 
   request_t draft;
   bool draft_existing;
@@ -104,6 +109,10 @@ enum {
 
 static void set_status(app_t *app, const char *message) {
   snprintf(app->status, sizeof(app->status), "%s", message);
+}
+
+static void set_default_main_status(app_t *app) {
+  set_status(app, DEFAULT_MAIN_STATUS);
 }
 
 static void now_iso(char out[40]) {
@@ -389,6 +398,16 @@ static void draw_main(app_t *app) {
     curs_set(1);
   } else if (app->main_mode == MAIN_MODE_ACTION) {
     mvprintw(h - 1, 0, "[esc/n] cancel   [y] send request   [e] edit body   [a] edit auth");
+  } else if (app->main_mode == MAIN_MODE_DELETE_CONFIRM) {
+    int prompt_w = w - 1;
+    if (prompt_w < 20) {
+      prompt_w = 20;
+    }
+    int name_w = prompt_w - 30;
+    if (name_w < 4) {
+      name_w = 4;
+    }
+    mvprintw(h - 1, 0, "Delete '%.*s'? [y] yes  [n/Esc] cancel", name_w, app->delete_confirm_name);
   } else {
     mvprintw(h - 1, 0, "%.*s", w - 1, app->status);
   }
@@ -403,7 +422,7 @@ static void draw_help(void) {
   erase();
 
   mvprintw(1, 2, "tuiman help");
-  mvprintw(3, 2, "Main: j/k gg G / ? : Enter Esc n N");
+  mvprintw(3, 2, "Main: j/k gg G / ? : Enter d Esc n N");
   mvprintw(4, 2, "Actions: y send, e edit body, a edit auth");
   mvprintw(5, 2, "Commands: :new [METHOD] [URL], :history, :export [DIR], :import [DIR], :help, :q");
   mvprintw(6, 2, "New request editor: j/k move, i edit field, e edit body, :w save, :q cancel, :secret VALUE");
@@ -870,6 +889,7 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
     if (ch == 27) {
       app->main_mode = MAIN_MODE_NORMAL;
       line_reset(app->cmdline, &app->cmdline_len);
+      set_default_main_status(app);
       return;
     }
     if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
@@ -885,7 +905,7 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
           snprintf(msg, sizeof(msg), "FILTER: %s (%zu results)", app->filter, app->visible_len);
           set_status(app, msg);
         } else {
-          set_status(app, "Filter cleared");
+          set_default_main_status(app);
         }
       } else {
         execute_main_command(app, running, app->cmdline);
@@ -928,6 +948,52 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
     }
     if (ch == 'n' || ch == 27) {
       app->main_mode = MAIN_MODE_NORMAL;
+      set_default_main_status(app);
+      return;
+    }
+    return;
+  }
+
+  if (app->main_mode == MAIN_MODE_DELETE_CONFIRM) {
+    if (ch == 'y') {
+      size_t old_visible = app->selected_visible;
+      char next_select_id[TUIMAN_ID_LEN] = {0};
+
+      if (app->visible_len > 1) {
+        size_t next_visible = 0;
+        if (old_visible + 1 < app->visible_len) {
+          next_visible = old_visible + 1;
+        } else if (old_visible > 0) {
+          next_visible = old_visible - 1;
+        }
+
+        size_t next_index = app->visible_indices[next_visible];
+        if (next_index < app->requests.len) {
+          snprintf(next_select_id, sizeof(next_select_id), "%s", app->requests.items[next_index].id);
+        }
+      }
+
+      if (request_store_delete(&app->paths, app->delete_confirm_id) == 0) {
+        char deleted_name[TUIMAN_NAME_LEN];
+        snprintf(deleted_name, sizeof(deleted_name), "%s", app->delete_confirm_name);
+        load_requests(app, next_select_id[0] != '\0' ? next_select_id : NULL);
+        char msg[STATUS_MAX];
+        snprintf(msg, sizeof(msg), "Deleted request: %s", deleted_name);
+        set_status(app, msg);
+      } else {
+        set_status(app, "Failed to delete request");
+      }
+
+      app->delete_confirm_id[0] = '\0';
+      app->delete_confirm_name[0] = '\0';
+      app->main_mode = MAIN_MODE_NORMAL;
+      return;
+    }
+    if (ch == 'n' || ch == 27) {
+      app->delete_confirm_id[0] = '\0';
+      app->delete_confirm_name[0] = '\0';
+      app->main_mode = MAIN_MODE_NORMAL;
+      set_default_main_status(app);
       return;
     }
     return;
@@ -966,6 +1032,15 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
     return;
   }
 
+  if (ch == 'd') {
+    if (selected != NULL) {
+      snprintf(app->delete_confirm_id, sizeof(app->delete_confirm_id), "%s", selected->id);
+      snprintf(app->delete_confirm_name, sizeof(app->delete_confirm_name), "%s", selected->name);
+      app->main_mode = MAIN_MODE_DELETE_CONFIRM;
+    }
+    return;
+  }
+
   if (ch == '/') {
     app->main_mode = MAIN_MODE_SEARCH;
     line_reset(app->cmdline, &app->cmdline_len);
@@ -991,7 +1066,9 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
     if (app->filter[0] != '\0') {
       app->filter[0] = '\0';
       apply_filter(app, NULL);
-      set_status(app, "Filter cleared");
+      set_default_main_status(app);
+    } else {
+      set_default_main_status(app);
     }
     return;
   }
@@ -1200,10 +1277,11 @@ int main(void) {
   }
 
   load_requests(&app, NULL);
-  set_status(&app, "NORMAL | / search | : command | Enter actions");
+  set_default_main_status(&app);
   app.screen = SCREEN_MAIN;
   app.main_mode = MAIN_MODE_NORMAL;
 
+  setenv("ESCDELAY", "25", 1);
   initscr();
   cbreak();
   noecho();

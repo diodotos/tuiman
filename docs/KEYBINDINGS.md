@@ -5,7 +5,8 @@
 - `j` / `k`: move selection.
 - `gg` / `G`: jump top/bottom.
 - `Enter`: open action row for selected request.
-- `Esc`: clear filter (when active).
+- `d`: delete selected request with confirmation prompt.
+- `Esc`: clear filter or clear transient bottom status back to idle hint.
 
 Search/command:
 
@@ -20,6 +21,11 @@ Action row (`Enter` from main):
 - `e`: edit request body in `$VISUAL`/`$EDITOR`.
 - `a`: open selected request in auth-focused editor.
 - `Esc` or `n`: cancel action row.
+
+Delete confirmation prompt:
+
+- `y`: confirm delete.
+- `n` or `Esc`: cancel delete.
 
 ## New request editor
 

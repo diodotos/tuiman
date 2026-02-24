@@ -37,6 +37,7 @@ Main screen modes:
 
 - `NORMAL`
 - `ACTION`
+- `DELETE_CONFIRM`
 - `SEARCH` (`/`)
 - `REVERSE` (`?`, currently same substring engine)
 - `COMMAND` (`:`)
