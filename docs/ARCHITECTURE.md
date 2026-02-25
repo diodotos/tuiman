@@ -24,6 +24,8 @@
   - Main split view uses isolated ncurses windows per pane.
   - Main view has a dedicated bottom response pane with metadata + body preview.
   - Preview/response text uses internal wrapping logic (not terminal auto-wrap).
+  - Ratio-based reflow for vertical and horizontal pane splits.
+  - Mouse-driven divider dragging and keyboard resize nudges.
 - `src/core/json_body_macos.m`
   - macOS JSON parse + pretty formatting using Foundation.
 - `src/store/request_store.c`
@@ -57,7 +59,13 @@ New request editor modes:
 ## Screen model
 
 - Main split view: request list + request preview (top), response pane (bottom), status/cmdline (last row).
+- Selected requests can be edited in-place via `E` or `:edit`, reusing the new-request editor screen.
 - Main split view reflows by terminal width and can temporarily hide request preview when too narrow.
+- Vertical and horizontal split ratios are interactive and updated from drag events.
+- Main request preview and response preview bodies are wrapped and scrollable.
+- Response preview keeps the full response body in memory (not fixed to a small preview cap).
 - New request editor: field list + preview + vim-like bottom command line.
-- History: run list + run details.
+- New request editor uses the same section/label styling and split ratio model as main.
+- New request editor supports mouse dragging for its vertical divider.
+- History: run list + run details in the same modern split-pane style, with divider drag/resize.
 - Help: key/command quick reference.

@@ -6,6 +6,9 @@ Main command line is opened with `:` from the main screen.
   - Opens the vim-like new request editor.
   - Prefills method and URL when provided.
 
+- `:edit`
+  - Opens the full request editor for the currently selected request.
+
 - `:history`
   - Opens run history screen.
 
