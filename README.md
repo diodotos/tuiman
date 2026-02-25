@@ -1,67 +1,47 @@
-# tuiman (Rust + OpenTUI rewrite)
+# tuiman (TypeScript + OpenTUI rewrite)
 
-`tuiman` is being rewritten as:
+`tuiman` is now being rewritten as a single-process TypeScript app:
 
-- Rust backend (`backend/`) for data, HTTP, persistence, and platform services.
-- OpenTUI React frontend (`frontend/`) for terminal UX.
+- OpenTUI React frontend for terminal UX.
+- Bun-native services for request storage, history (SQLite), HTTP sending, and Keychain integration.
 
-The goal remains a vim/mutt-style terminal API client with parity to the stable C line, while improving architecture and visuals.
+The goal stays the same: keep vim/mutt-style terminal minimalism with near-parity to the stable C line.
 
 ## Current Rewrite Status
 
-This branch now contains the rewrite scaffold and intentionally removes residual C implementation from `tui-man-rust`.
-
-- C source and CMake build files removed.
-- Rust backend workspace scaffolded with typed crate boundaries.
-- OpenTUI React frontend scaffolded with split-pane visual skeleton and modal keybinding foundation.
-- PTY parity checklist added at `tools/parity/checklist.md`.
-
-Implemented now:
-
-- Backend CLI flags: `--help`, `--version`.
-- Backend stdio JSON-RPC baseline methods: `ping`, `bootstrap`.
-- Frontend bootstraps request list from backend and renders request/preview/response panes.
-
-Not yet migrated:
-
-- Full send/edit/history/auth parity.
-- release packaging for Rust+OpenTUI binaries.
+- Residual C implementation has been removed from this rewrite tree.
+- Rust/IPC backend path has been dropped in favor of in-process TypeScript services.
+- Main screen, command/search/action/delete flows, editor screen, history screen, and help screen are wired.
+- Request and run persistence are local-first and compatible with the C-line data locations.
 
 ## Repository Layout
 
 ```text
-backend/
-  Cargo.toml                 # workspace
-  apps/tuiman-backend/       # stdio RPC backend executable
-  crates/
-    tuiman-domain/           # shared model types
-    tuiman-storage/          # request/history persistence adapters
-    tuiman-http/             # HTTP execution adapter
-    tuiman-keychain/         # macOS keychain integration
-    tuiman-ipc/              # frontend/backend RPC contracts
-
 frontend/
-  package.json               # Bun + OpenTUI React app
+  package.json
   tsconfig.json
   src/
     index.tsx
     App.tsx
-    rpc/client.ts
+    services/
+      api.ts
+      requestStore.ts
+      historyStore.ts
+      httpClient.ts
+      keychain.ts
+      paths.ts
+
+scripts/
+  tuiman
+  install.sh
 
 tools/parity/
-  checklist.md               # C vs rewrite runtime parity checks
+  checklist.md
+  run-smoke.sh
+  ts-smoke.sh
 ```
 
 ## Local Development
-
-### 1) Build backend
-
-```bash
-cd backend
-cargo build -p tuiman-backend
-```
-
-### 2) Run frontend
 
 ```bash
 cd frontend
@@ -69,14 +49,17 @@ bun install
 bun run src/index.tsx
 ```
 
-If you built the backend in debug mode, frontend uses:
-
-- `../backend/target/debug/tuiman-backend`
-
-Override path when needed:
+Or from repo root:
 
 ```bash
-TUIMAN_BACKEND_PATH=/absolute/path/to/tuiman-backend bun run src/index.tsx
+./scripts/tuiman
+```
+
+CLI flags:
+
+```bash
+./scripts/tuiman --version
+./scripts/tuiman --help
 ```
 
 ## Parity Validation Workflow
@@ -84,8 +67,9 @@ TUIMAN_BACKEND_PATH=/absolute/path/to/tuiman-backend bun run src/index.tsx
 Use PTY sessions to validate behavior against the C baseline worktree.
 
 - C baseline binary: `../tui-man/build/tuiman`
-- Rewrite runtime: `frontend/src/index.tsx` + Rust backend
+- Rewrite runtime: `./scripts/tuiman`
 - Checklist: `tools/parity/checklist.md`
+- Smoke runner: `tools/parity/run-smoke.sh`
 
 ## Notes
 

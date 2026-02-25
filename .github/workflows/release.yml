@@ -19,18 +19,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
-      - name: Build backend
-        run: cargo build --release -p tuiman-backend
-        working-directory: backend
+      - name: Install frontend deps
+        run: bun install --cwd frontend
 
-      - name: Smoke test backend CLI
+      - name: Smoke test CLI flags
         run: |
-          ./backend/target/release/tuiman-backend --version
-          ./backend/target/release/tuiman-backend --help > /tmp/tuiman-help.txt
+          ./scripts/tuiman --version
+          ./scripts/tuiman --help > /tmp/tuiman-help.txt
           grep -q "Usage:" /tmp/tuiman-help.txt
+
+      - name: Typecheck frontend
+        run: bun run --cwd frontend typecheck
 
       - name: Create tarball + checksum
         run: |
@@ -41,7 +45,6 @@ jobs:
           NAME="tuiman-${VERSION}-${OS}-${ARCH}"
 
           mkdir -p "dist/${NAME}"
-          cp ./backend/target/release/tuiman-backend "dist/${NAME}/tuiman-backend"
           cp ./scripts/tuiman "dist/${NAME}/tuiman"
           cp ./README.md "dist/${NAME}/README.md"
           cp ./scripts/install.sh "dist/${NAME}/install.sh"

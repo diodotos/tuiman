@@ -1,44 +1,44 @@
 # Release Process (rewrite branch)
 
-This document is now in transition for Rust + OpenTUI packaging.
+This rewrite now packages a TypeScript OpenTUI app (no Rust sidecar).
 
 ## Current state
 
-- Legacy C release workflow file still exists at `.github/workflows/release.yml` and is obsolete for this branch.
-- Rewrite release automation must package at least:
-  - frontend launch binary/script (`tuiman`)
-  - backend executable (`tuiman-backend`)
-  - `install.sh` and `README.md`
+- Release workflow is in `.github/workflows/release.yml`.
+- Assets include:
+  - launcher script (`tuiman`)
+  - `frontend/` app directory
+  - `install.sh`
+  - `README.md`
 
 ## Rewrite release prerequisites
 
-- `backend` workspace version and `frontend` package version aligned.
-- Backend compiles in release mode.
-- Frontend runtime bootstraps and can reach backend.
+- Frontend dependencies install (`bun install --cwd frontend`).
+- Frontend typecheck passes.
+- Launcher flags work (`--help`, `--version`).
 - PTY parity checklist pass for minimum baseline behavior.
 
-## Planned release shape
+## Release shape
 
-1. Build backend:
+1. Install frontend deps:
 
    ```bash
-   cd backend
-   cargo build --release -p tuiman-backend
+   bun install --cwd frontend
    ```
 
-2. Build frontend runtime entrypoint (strategy pending: Bun script vs compiled launcher).
+2. Run smoke checks:
 
-3. Package assets into architecture-specific tarballs.
+   ```bash
+   ./scripts/tuiman --version
+   ./scripts/tuiman --help
+   bun run --cwd frontend typecheck
+   ./tools/parity/run-smoke.sh
+   ```
 
-4. Smoke tests:
+3. Package `tuiman`, `frontend/`, `install.sh`, and `README.md` into tarball.
 
-   - `tuiman --version`
-   - `tuiman-backend --version`
-   - frontend boot + backend bootstrap over RPC
-
-5. Publish tag-driven GitHub release.
+4. Publish tag-driven GitHub release.
 
 ## TODO
 
-- Replace `.github/workflows/release.yml` with Rust/OpenTUI aware pipeline.
-- Update `scripts/install.sh` for dual-binary install.
+- Add a compiled launcher option so end users do not need Bun preinstalled.

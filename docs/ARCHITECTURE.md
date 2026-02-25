@@ -10,43 +10,42 @@
 ## Stack
 
 - Frontend: OpenTUI React (`@opentui/react`, Bun runtime).
-- Backend: Rust workspace (`cargo`, typed crate boundaries).
-- Frontend/backend protocol: stdio JSON-RPC.
+- Services: TypeScript modules running in the same process.
+- Persistence: Bun file APIs + `bun:sqlite`.
 
 ## Topology
 
-- Frontend process renders terminal UI and handles key/mouse interactions.
-- Backend process owns request storage, history, auth/keychain, and HTTP execution.
-- Frontend sends RPC envelopes over stdin; backend replies on stdout with JSON lines.
+- One process owns both rendering and data operations.
+- `App.tsx` drives screens/modes and calls service functions directly.
+- Service modules isolate concerns (request store, history store, keychain, HTTP, paths).
 
-## Rust Workspace
+## Service Modules
 
-- `backend/apps/tuiman-backend`
-  - backend executable and RPC dispatch loop.
-- `backend/crates/tuiman-domain`
-  - shared request/run/path models.
-- `backend/crates/tuiman-ipc`
-  - RPC envelope and response contracts.
-- `backend/crates/tuiman-storage`
-  - request and history persistence adapters.
-- `backend/crates/tuiman-http`
-  - HTTP send adapter (migration target for C `libcurl` behavior).
-- `backend/crates/tuiman-keychain`
-  - macOS keychain integration (`/usr/bin/security`).
+- `frontend/src/services/paths.ts`
+  - canonical local directories (`~/.config/tuiman`, `~/.local/state/tuiman`, `~/.cache/tuiman`).
+- `frontend/src/services/requestStore.ts`
+  - request JSON load/save/delete and default field handling.
+- `frontend/src/services/historyStore.ts`
+  - SQLite run history schema, migration, load, and insert.
+- `frontend/src/services/httpClient.ts`
+  - request execution with auth/header/body behavior and response timing.
+- `frontend/src/services/keychain.ts`
+  - macOS Keychain wrapper via `/usr/bin/security`.
+- `frontend/src/services/api.ts`
+  - service facade consumed by UI.
 
 ## Frontend Modules
 
 - `frontend/src/index.tsx`
   - OpenTUI renderer bootstrap.
 - `frontend/src/App.tsx`
-  - primary split-pane UI skeleton and keyboard-mode baseline.
-- `frontend/src/rpc/client.ts`
-  - backend process invocation + JSON request/response plumbing.
+  - main screen + history/editor/help screens and modal state handling.
 - `frontend/src/theme.ts`
   - color direction and method color mapping.
 
 ## Parity Process
 
 - C baseline runs from sibling worktree (`../tui-man`).
-- Rewrite runs with OpenTUI + Rust backend.
+- Rewrite runs as a single TypeScript OpenTUI app.
 - Runtime checks are tracked in `tools/parity/checklist.md` and validated via PTY loops.
+- `tools/parity/run-smoke.sh` and `tools/parity/ts-smoke.sh` provide repeatable smoke checks.

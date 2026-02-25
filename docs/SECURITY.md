@@ -6,9 +6,9 @@
 - Secrets are stored in macOS Keychain.
 - Requests keep only a `Secret Ref` string.
 
-## macOS backend
+## macOS integration
 
-Rewrite backend continues to use `/usr/bin/security` with service name `tuiman`:
+Rewrite app continues to use `/usr/bin/security` with service name `tuiman`:
 
 - Set: `add-generic-password ... -U`
 - Get: `find-generic-password ... -w`

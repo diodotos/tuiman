@@ -2,19 +2,36 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+APP_DIR=""
 
-BACKEND_PATH="${TUIMAN_BACKEND_PATH:-${ROOT_DIR}/tuiman-backend}"
-FRONTEND_DIR="${ROOT_DIR}/frontend"
+if [ -d "${SCRIPT_DIR}/frontend" ]; then
+  APP_DIR="${SCRIPT_DIR}/frontend"
+elif [ -d "${SCRIPT_DIR}/../frontend" ]; then
+  APP_DIR="${SCRIPT_DIR}/../frontend"
+fi
 
-if [ ! -x "${BACKEND_PATH}" ]; then
-  echo "Expected executable backend at ${BACKEND_PATH}" >&2
+if [ -z "${APP_DIR}" ] || [ ! -f "${APP_DIR}/src/index.tsx" ]; then
+  echo "Expected frontend sources next to launcher or in ../frontend" >&2
   exit 1
 fi
 
-if [ ! -f "${FRONTEND_DIR}/src/index.tsx" ]; then
-  echo "Expected frontend sources at ${FRONTEND_DIR}" >&2
-  exit 1
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
+  bun -e 'const p = JSON.parse(await Bun.file(process.argv[1]).text()); console.log(p.version);' "${APP_DIR}/package.json"
+  exit 0
 fi
 
-exec env TUIMAN_BACKEND_PATH="${BACKEND_PATH}" bun run "${FRONTEND_DIR}/src/index.tsx"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<EOF
+tuiman
+Usage: tuiman [--help] [--version]
+
+Runs the OpenTUI TypeScript client.
+EOF
+  exit 0
+fi
+
+if [ ! -d "${APP_DIR}/node_modules" ]; then
+  bun install --cwd "${APP_DIR}"
+fi
+
+exec bun run --cwd "${APP_DIR}" src/index.tsx

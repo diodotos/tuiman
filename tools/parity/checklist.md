@@ -1,4 +1,4 @@
-# C vs Rust/OpenTUI Parity Checklist
+# C vs TypeScript/OpenTUI Parity Checklist
 
 Use this checklist during PTY-based validation loops.
 

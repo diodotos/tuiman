@@ -2,18 +2,18 @@
 
 ## v0.2 rewrite branch (current)
 
-- C code removed from `tui-man-rust` in favor of Rust + OpenTUI scaffold.
-- Rust backend workspace + stdio RPC baseline in place.
-- OpenTUI React shell with split-pane visual structure in place.
+- C code removed from `tui-man-rust` in favor of TypeScript + OpenTUI rewrite.
+- Single-process service architecture in place (request store, history store, HTTP client, keychain).
+- OpenTUI multi-screen shell (main/editor/history/help) in place.
 - PTY parity checklist established.
 
 ## Next (parity milestones)
 
-- Complete backend request store parity (read/write/list/delete + defaults).
-- Complete backend history parity (schema/migrations/run snapshots/response body).
-- Implement backend HTTP parity for auth/header/body behavior.
-- Implement full modal frontend parity (`NORMAL`, `ACTION`, `SEARCH`, `COMMAND`, editor/history/help screens).
-- Implement divider drag/resize and body scrolling parity.
+- Complete import/export parity (`:import`, `:export`).
+- Wire external body editor flow in main action row and editor screen.
+- Add JSON validate + pretty-format on save parity.
+- Tighten mouse drag behavior parity for all split panes.
+- Add reverse/fuzzy search behavior parity (`?`, `n`, `N`).
 
 ## Cleanup and UX refinement
 
@@ -23,6 +23,6 @@
 
 ## Later
 
-- Linux and Windows keyring support in backend.
+- Linux and Windows keyring support.
 - OpenAPI import.
-- Release packaging parity for dual binaries (`tuiman`, `tuiman-backend`).
+- Compiled launcher release option.

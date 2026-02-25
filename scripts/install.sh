@@ -2,32 +2,35 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_FRONTEND="${SCRIPT_DIR}/tuiman"
-BIN_BACKEND="${SCRIPT_DIR}/tuiman-backend"
+LAUNCHER_SOURCE="${SCRIPT_DIR}/tuiman"
+FRONTEND_SOURCE="${SCRIPT_DIR}/frontend"
 
-if [ ! -f "${BIN_FRONTEND}" ]; then
-  echo "Expected frontend launcher at ${BIN_FRONTEND}" >&2
+if [ ! -f "${LAUNCHER_SOURCE}" ]; then
+  echo "Expected frontend launcher at ${LAUNCHER_SOURCE}" >&2
   echo "Run this script from an extracted rewrite release folder." >&2
   exit 1
 fi
 
-if [ ! -f "${BIN_BACKEND}" ]; then
-  echo "Expected backend binary at ${BIN_BACKEND}" >&2
+if [ ! -d "${FRONTEND_SOURCE}" ]; then
+  echo "Expected frontend directory at ${FRONTEND_SOURCE}" >&2
   echo "Run this script from an extracted rewrite release folder." >&2
   exit 1
 fi
 
 PREFIX="${TUIMAN_PREFIX:-$HOME/.local}"
 BINDIR="${PREFIX}/bin"
+LIBEXECDIR="${PREFIX}/libexec/tuiman"
 TARGET="${BINDIR}/tuiman"
-TARGET_BACKEND="${BINDIR}/tuiman-backend"
 
-mkdir -p "${BINDIR}"
-install -m 0755 "${BIN_FRONTEND}" "${TARGET}"
-install -m 0755 "${BIN_BACKEND}" "${TARGET_BACKEND}"
+mkdir -p "${BINDIR}" "${LIBEXECDIR}"
+
+rm -rf "${LIBEXECDIR}/frontend"
+cp -R "${FRONTEND_SOURCE}" "${LIBEXECDIR}/frontend"
+install -m 0755 "${LAUNCHER_SOURCE}" "${LIBEXECDIR}/tuiman"
+ln -sf "${LIBEXECDIR}/tuiman" "${TARGET}"
 
 echo "Installed: ${TARGET}"
-echo "Installed: ${TARGET_BACKEND}"
+echo "Installed assets: ${LIBEXECDIR}"
 
 case ":${PATH}:" in
   *":${BINDIR}:"*)
@@ -43,4 +46,3 @@ esac
 echo
 echo "Verify with:"
 echo "  ${TARGET} --version"
-echo "  ${TARGET_BACKEND} --version"

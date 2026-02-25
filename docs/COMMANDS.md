@@ -1,36 +1,34 @@
 # Commands
 
-## Backend executable flags
+## Launcher flags
 
-`backend/apps/tuiman-backend` currently supports:
+`scripts/tuiman` supports:
 
 - `--help` / `-h`
 - `--version` / `-v`
 
-## Backend stdio RPC methods
+## Main command mode
 
-Current scaffold methods:
-
-- `ping`
-  - Returns backend version.
-- `bootstrap`
-  - Returns request list and recent runs.
-
-## Target UI command parity (planned)
-
-Main command line is opened with `:` from the main screen.
+Main command line opens with `:` from main screen.
 
 - `:new [METHOD] [URL]`
+  - Implemented (opens editor with optional prefilled method + URL).
 - `:edit`
+  - Implemented (opens editor for selected request).
 - `:history`
+  - Implemented (opens history screen).
 - `:export [DIR]`
+  - Placeholder status message.
 - `:import [DIR]`
+  - Placeholder status message.
 - `:help`
+  - Implemented (opens help screen).
 - `:q`
+  - Implemented (quit).
 
-Editor command mode targets:
+## Editor command mode
 
-- `:w`
-- `:q`
-- `:wq`
-- `:secret VALUE`
+- `:w` save and return to main.
+- `:q` cancel and return to main.
+- `:wq` save and return to main.
+- `:secret VALUE` save value to Keychain using current `Secret Ref`.

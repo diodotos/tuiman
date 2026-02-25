@@ -5,11 +5,51 @@ This document tracks rewrite keybinding status.
 ## Implemented in current OpenTUI scaffold
 
 - `j` / `k` and arrow keys: move request selection.
-- `/`: placeholder search mode message.
-- `Enter`: placeholder action-row message.
-- `Esc`: clear transient status/filter.
-- `q`: quit.
-- `Z` + `Z` currently exits as an early placeholder.
+- `gg` / `G`: jump to top/bottom.
+- `/`: search mode with filter-as-you-type and `Enter` to lock.
+- `:`: command mode.
+- `Enter`: action row mode.
+- `d`: delete confirmation mode (`y` confirm, `n`/`Esc` cancel).
+- `ZZ` / `ZQ`: quit from normal mode.
+- `H` / `L`: nudge main vertical split.
+- `K` / `J`: nudge main response split.
+- `Esc`: clear transient status/filter or cancel active mode.
+- `{` / `}`: request body scroll.
+- `[` / `]`: response body scroll.
+
+Action row currently wired:
+
+- `y`: sends selected request via TypeScript service and records run history.
+- `e`: external body editor placeholder message.
+- `a`: opens editor focused on auth fields.
+- `Esc` or `n`: cancel action mode.
+
+Command mode currently wired:
+
+- `:new [METHOD] [URL]`: open editor for new request.
+- `:edit`: open editor for selected request.
+- `:history`: open history screen.
+- `:help`: open help screen.
+- `:q`: quit.
+- `:import`, `:export`: placeholder status messages.
+
+Editor screen currently wired:
+
+- `j` / `k`: move between fields.
+- `h` / `l` on Method: cycle method.
+- `i` or `Enter`: insert mode for editable fields.
+- `Esc`: cancel editor and return.
+- `Ctrl+s`: save.
+- `:w`, `:q`, `:wq`: editor command mode.
+- `:secret VALUE`: store Keychain secret for current `Secret Ref`.
+
+History screen currently wired:
+
+- `j` / `k`: move through runs.
+- `r`: replay selected run.
+- `H` / `L`: resize split.
+- `{` / `}`: scroll detail body.
+- `Esc`: return to main.
 
 ## Target parity keybindings (must match C line)
 

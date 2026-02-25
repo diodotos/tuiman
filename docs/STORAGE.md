@@ -31,5 +31,6 @@ Rewrite target keeps SQLite `runs` compatibility:
 
 ## Current scaffold state
 
-- Request loading from request JSON files is wired.
-- History loading is stubbed pending SQLite migration in Rust.
+- Request load/save/delete is wired via TypeScript service modules.
+- History load/record is wired via `bun:sqlite` service modules and schema migration.
+- Main action-row send path now records request snapshot + response body per run.
