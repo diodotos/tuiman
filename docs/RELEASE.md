@@ -44,7 +44,7 @@ So yes: releases are a distinct process.
 
 ## What the workflow does
 
-- Builds on `macos-13` and `macos-14`.
+- Builds on `macos-15-intel` and `macos-14`.
 - Runs smoke tests:
   - `./build/tuiman --version`
   - `./build/tuiman --help`
