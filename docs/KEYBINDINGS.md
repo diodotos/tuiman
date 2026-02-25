@@ -7,6 +7,7 @@
 - `Enter`: open action row for selected request.
 - `E`: open full editor for selected request (`name`, `method`, `url`, headers, auth, body).
 - `d`: delete selected request with confirmation prompt.
+- `Z` `Z` or `Z` `Q`: quit from main normal mode (vim-style).
 - `Esc`: clear filter or clear transient bottom status back to idle hint.
 - `H` / `L`: nudge vertical divider left/right.
 - `K` / `J`: nudge horizontal divider up/down.
@@ -88,4 +89,5 @@ Save validation feedback:
 - `H` / `L`: nudge vertical divider left/right.
 - `{` / `}`: scroll details in the right pane.
 - mouse drag on the vertical divider: resize list/detail panes.
+- Right pane shows stored request snapshot plus response metadata/body for the selected run.
 - `Esc`: return to main screen.

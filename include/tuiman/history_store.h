@@ -18,6 +18,8 @@ typedef struct {
   long duration_ms;
   char error[TUIMAN_HISTORY_ERR_LEN];
   char created_at[TUIMAN_HISTORY_TIME_LEN];
+  char *request_snapshot;
+  char *response_body;
 } run_entry_t;
 
 typedef struct {

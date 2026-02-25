@@ -32,6 +32,7 @@
   - Request JSON read/write/list/delete.
 - `src/store/history_store.c`
   - Run history schema and queries.
+  - Stores per-run request snapshot and response body for detailed replay context.
 - `src/net/http_client.c`
   - Request execution and auth/header application.
 - `src/auth/keychain_macos.c`
@@ -68,4 +69,5 @@ New request editor modes:
 - New request editor uses the same section/label styling and split ratio model as main.
 - New request editor supports mouse dragging for its vertical divider.
 - History: run list + run details in the same modern split-pane style, with divider drag/resize.
+- History detail pane shows stored request preview text and response body for each run.
 - Help: key/command quick reference.

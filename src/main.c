@@ -20,7 +20,7 @@
 #define CMDLINE_MAX 256
 #define STATUS_MAX 512
 #define DEFAULT_MAIN_STATUS \
-  "j/k move | / search | : command | Enter actions | E edit | d delete | { } req body | [ ] resp body | drag"
+  "j/k move | / search | : command | Enter actions | E edit | d delete | ZZ/ZQ quit | { } req body | [ ] resp body | drag"
 
 #define MAIN_MIN_LEFT_W 24
 #define MAIN_MIN_RIGHT_W 20
@@ -126,6 +126,7 @@ typedef struct {
   new_mode_t new_mode;
   drag_mode_t drag_mode;
   bool pending_g;
+  bool pending_Z;
 
   double split_ratio;
   double response_ratio;
@@ -407,6 +408,263 @@ static void clear_last_response(app_t *app) {
   free(app->last_response_body);
   app->last_response_body = NULL;
   app->last_response_body_len = 0;
+}
+
+static char *dup_text_n(const char *text, size_t len) {
+  const char *src = text != NULL ? text : "";
+  char *out = malloc(len + 1);
+  if (out == NULL) {
+    return NULL;
+  }
+  memcpy(out, src, len);
+  out[len] = '\0';
+  return out;
+}
+
+static char *build_request_snapshot(const request_t *req) {
+  if (req == NULL) {
+    return NULL;
+  }
+
+  int has_header = req->header_key[0] != '\0' || req->header_value[0] != '\0';
+  const char *name = req->name[0] != '\0' ? req->name : "(unnamed)";
+  const char *auth_type = req->auth_type[0] != '\0' ? req->auth_type : "none";
+  const char *secret_ref = req->auth_secret_ref[0] != '\0' ? req->auth_secret_ref : "(none)";
+  const char *auth_key_name = req->auth_key_name[0] != '\0' ? req->auth_key_name : "(none)";
+  const char *auth_location = req->auth_location[0] != '\0' ? req->auth_location : "(none)";
+  const char *auth_username = req->auth_username[0] != '\0' ? req->auth_username : "(none)";
+  const char *body = req->body[0] != '\0' ? req->body : "(empty)";
+
+  size_t needed = strlen(name) + strlen(req->method) + strlen(req->url) + strlen(auth_type) + strlen(secret_ref) +
+                  strlen(auth_key_name) + strlen(auth_location) + strlen(auth_username) + strlen(body) +
+                  strlen(req->header_key) + strlen(req->header_value) + 512;
+
+  char *snapshot = malloc(needed);
+  if (snapshot == NULL) {
+    return NULL;
+  }
+
+  if (has_header) {
+    snprintf(snapshot, needed,
+             "name: %s\n"
+             "method: %s\n"
+             "url: %s\n"
+             "auth: %s\n"
+             "secret_ref: %s\n"
+             "auth_key_name: %s\n"
+             "auth_location: %s\n"
+             "auth_username: %s\n"
+             "header: %s: %s\n"
+             "body:\n"
+             "%s",
+             name, req->method, req->url, auth_type, secret_ref, auth_key_name, auth_location, auth_username,
+             req->header_key, req->header_value, body);
+  } else {
+    snprintf(snapshot, needed,
+             "name: %s\n"
+             "method: %s\n"
+             "url: %s\n"
+             "auth: %s\n"
+             "secret_ref: %s\n"
+             "auth_key_name: %s\n"
+             "auth_location: %s\n"
+             "auth_username: %s\n"
+             "header: none\n"
+             "body:\n"
+             "%s",
+             name, req->method, req->url, auth_type, secret_ref, auth_key_name, auth_location, auth_username, body);
+  }
+
+  return snapshot;
+}
+
+static void append_fmt(char *buf, size_t cap, size_t *offset, const char *fmt, ...) {
+  if (buf == NULL || offset == NULL || fmt == NULL || *offset >= cap) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, fmt);
+  int wrote = vsnprintf(buf + *offset, cap - *offset, fmt, args);
+  va_end(args);
+
+  if (wrote < 0) {
+    return;
+  }
+
+  size_t n = (size_t)wrote;
+  if (n >= cap - *offset) {
+    *offset = cap - 1;
+  } else {
+    *offset += n;
+  }
+}
+
+static int snapshot_extract_line_value(const char *snapshot, const char *prefix, char *out, size_t out_len) {
+  if (out == NULL || out_len == 0) {
+    return 0;
+  }
+  out[0] = '\0';
+
+  if (snapshot == NULL || snapshot[0] == '\0' || prefix == NULL) {
+    return 0;
+  }
+
+  size_t prefix_len = strlen(prefix);
+  const char *p = snapshot;
+  while (*p != '\0') {
+    const char *line_end = p;
+    while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r') {
+      line_end++;
+    }
+
+    size_t line_len = (size_t)(line_end - p);
+    if (line_len == 5 && strncmp(p, "body:", 5) == 0) {
+      break;
+    }
+
+    if (line_len >= prefix_len && strncmp(p, prefix, prefix_len) == 0) {
+      size_t value_len = line_len - prefix_len;
+      if (value_len >= out_len) {
+        value_len = out_len - 1;
+      }
+      memcpy(out, p + prefix_len, value_len);
+      out[value_len] = '\0';
+      return 1;
+    }
+
+    p = line_end;
+    while (*p == '\n' || *p == '\r') {
+      p++;
+    }
+  }
+
+  return 0;
+}
+
+static const char *snapshot_body_start(const char *snapshot) {
+  if (snapshot == NULL || snapshot[0] == '\0') {
+    return NULL;
+  }
+
+  const char *p = snapshot;
+  while (*p != '\0') {
+    const char *line_end = p;
+    while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r') {
+      line_end++;
+    }
+
+    size_t line_len = (size_t)(line_end - p);
+    if (line_len == 5 && strncmp(p, "body:", 5) == 0) {
+      p = line_end;
+      while (*p == '\n' || *p == '\r') {
+        p++;
+      }
+      return p;
+    }
+
+    p = line_end;
+    while (*p == '\n' || *p == '\r') {
+      p++;
+    }
+  }
+
+  return NULL;
+}
+
+static int has_meaningful_value(const char *value) {
+  if (value == NULL || value[0] == '\0') {
+    return 0;
+  }
+  if (strcmp(value, "none") == 0 || strcmp(value, "(none)") == 0) {
+    return 0;
+  }
+  return 1;
+}
+
+static char *build_history_detail_text(const run_entry_t *run) {
+  if (run == NULL) {
+    return NULL;
+  }
+
+  char method[64];
+  char url[768];
+  char auth[128];
+  char secret_ref[160];
+  char auth_key_name[160];
+  char auth_location[96];
+  char auth_username[160];
+  char header[512];
+
+  snprintf(method, sizeof(method), "%s", run->method);
+  snprintf(url, sizeof(url), "%s", run->url);
+  auth[0] = '\0';
+  secret_ref[0] = '\0';
+  auth_key_name[0] = '\0';
+  auth_location[0] = '\0';
+  auth_username[0] = '\0';
+  header[0] = '\0';
+
+  const char *request_body = "(request snapshot unavailable for this run)";
+  if (run->request_snapshot != NULL && run->request_snapshot[0] != '\0') {
+    (void)snapshot_extract_line_value(run->request_snapshot, "method: ", method, sizeof(method));
+    (void)snapshot_extract_line_value(run->request_snapshot, "url: ", url, sizeof(url));
+    (void)snapshot_extract_line_value(run->request_snapshot, "auth: ", auth, sizeof(auth));
+    (void)snapshot_extract_line_value(run->request_snapshot, "secret_ref: ", secret_ref, sizeof(secret_ref));
+    (void)snapshot_extract_line_value(run->request_snapshot, "auth_key_name: ", auth_key_name, sizeof(auth_key_name));
+    (void)snapshot_extract_line_value(run->request_snapshot, "auth_location: ", auth_location, sizeof(auth_location));
+    (void)snapshot_extract_line_value(run->request_snapshot, "auth_username: ", auth_username, sizeof(auth_username));
+    (void)snapshot_extract_line_value(run->request_snapshot, "header: ", header, sizeof(header));
+
+    const char *body = snapshot_body_start(run->request_snapshot);
+    if (body != NULL) {
+      request_body = body[0] != '\0' ? body : "(empty)";
+    } else {
+      request_body = "(request body unavailable for this run)";
+    }
+  }
+
+  const char *response_body =
+      (run->response_body != NULL && run->response_body[0] != '\0') ? run->response_body : "(empty)";
+  const char *error_text = run->error[0] != '\0' ? run->error : "none";
+
+  size_t needed = strlen(method) + strlen(url) + strlen(auth) + strlen(secret_ref) + strlen(auth_key_name) +
+                  strlen(auth_location) + strlen(auth_username) + strlen(header) + strlen(request_body) +
+                  strlen(response_body) + strlen(error_text) + 1024;
+  char *text = malloc(needed);
+  if (text == NULL) {
+    return NULL;
+  }
+
+  size_t off = 0;
+  append_fmt(text, needed, &off, "Request\n");
+  append_fmt(text, needed, &off, "method: %s\n", method[0] != '\0' ? method : run->method);
+  append_fmt(text, needed, &off, "url: %s\n", url[0] != '\0' ? url : run->url);
+  if (has_meaningful_value(auth)) {
+    append_fmt(text, needed, &off, "auth: %s\n", auth);
+  }
+  if (has_meaningful_value(secret_ref)) {
+    append_fmt(text, needed, &off, "secret_ref: %s\n", secret_ref);
+  }
+  if (has_meaningful_value(auth_key_name)) {
+    append_fmt(text, needed, &off, "auth_key_name: %s\n", auth_key_name);
+  }
+  if (has_meaningful_value(auth_location)) {
+    append_fmt(text, needed, &off, "auth_location: %s\n", auth_location);
+  }
+  if (has_meaningful_value(auth_username)) {
+    append_fmt(text, needed, &off, "auth_username: %s\n", auth_username);
+  }
+  if (has_meaningful_value(header)) {
+    append_fmt(text, needed, &off, "header: %s\n", header);
+  }
+  append_fmt(text, needed, &off, "body:\n%s\n\n", request_body);
+
+  append_fmt(text, needed, &off, "Response\n");
+  append_fmt(text, needed, &off, "error: %s\n", error_text);
+  append_fmt(text, needed, &off, "body:\n%s", response_body);
+
+  return text;
 }
 
 static void line_reset(char *buf, size_t *len) {
@@ -1504,7 +1762,7 @@ static void draw_help(void) {
   erase();
 
   mvprintw(1, 2, "tuiman help");
-  mvprintw(3, 2, "Main: j/k gg G / ? : Enter E d Esc n N H/L K/J resize { } req body [ ] resp body");
+  mvprintw(3, 2, "Main: j/k gg G / ? : Enter E d Esc n N H/L K/J resize ZZ/ZQ quit { } req body [ ] resp body");
   mvprintw(4, 2, "Actions: y send, e edit body, a edit auth");
   mvprintw(5, 2, "Commands: :new [METHOD] [URL], :edit, :history, :export [DIR], :import [DIR], :help, :q");
   mvprintw(6, 2, "Request editor: j/k move, i edit (except Method), h/l method, { } body scroll, e body, :w/:q");
@@ -1986,18 +2244,15 @@ static int send_request_and_record(app_t *app, request_t *req) {
     body_len = strlen(body);
   }
 
-  char *copied = malloc(body_len + 1);
+  char *copied = dup_text_n(body, body_len);
   if (copied != NULL) {
-    memcpy(copied, body, body_len);
-    copied[body_len] = '\0';
     app->last_response_body = copied;
     app->last_response_body_len = body_len;
   } else {
     const char *fallback = "(response body unavailable: out of memory)";
     size_t fallback_len = strlen(fallback);
-    copied = malloc(fallback_len + 1);
+    copied = dup_text_n(fallback, fallback_len);
     if (copied != NULL) {
-      memcpy(copied, fallback, fallback_len + 1);
       app->last_response_body = copied;
       app->last_response_body_len = fallback_len;
     }
@@ -2012,8 +2267,22 @@ static int send_request_and_record(app_t *app, request_t *req) {
   run.status_code = (int)response.status_code;
   run.duration_ms = response.duration_ms;
   snprintf(run.error, sizeof(run.error), "%s", response.error);
+  run.request_snapshot = build_request_snapshot(req);
+  if (run.request_snapshot == NULL) {
+    const char *fallback = "(request snapshot unavailable: out of memory)";
+    run.request_snapshot = dup_text_n(fallback, strlen(fallback));
+  }
+  run.response_body = dup_text_n(body, body_len);
+  if (run.response_body == NULL) {
+    const char *fallback = "(response body unavailable: out of memory)";
+    run.response_body = dup_text_n(fallback, strlen(fallback));
+  }
   now_iso(run.created_at);
   history_store_add_run(app->db, &run);
+  free(run.request_snapshot);
+  free(run.response_body);
+  run.request_snapshot = NULL;
+  run.response_body = NULL;
 
   if (rc == 0) {
     set_status(app, "Request sent");
@@ -2096,11 +2365,19 @@ static void draw_history(app_t *app) {
 
   int header_y = 2;
   if (header_y < layout.content_h) {
+    if (has_colors()) {
+      wattron(left_win, COLOR_PAIR(COLOR_LABEL));
+    }
+    wattron(left_win, A_BOLD);
     win_add_text(left_win, header_y, 1, "When");
     win_add_text(left_win, header_y, method_x, "Method");
     win_add_text(left_win, header_y, status_x, "Status");
     win_add_text(left_win, header_y, duration_x, "ms");
     win_add_text(left_win, header_y, name_x, "Name");
+    wattroff(left_win, A_BOLD);
+    if (has_colors()) {
+      wattroff(left_win, COLOR_PAIR(COLOR_LABEL));
+    }
   }
 
   int rows = layout.content_h - (header_y + 1);
@@ -2217,15 +2494,33 @@ static void draw_history(app_t *app) {
       row++;
 
       if (row < layout.content_h) {
-        win_add_section_title(right_win, row, 0, "Details");
+        if (has_colors()) {
+          wattron(right_win, COLOR_PAIR(COLOR_SECTION));
+        }
+        mvwhline(right_win, row, 0, ACS_HLINE, layout.right_w);
+        if (has_colors()) {
+          wattroff(right_win, COLOR_PAIR(COLOR_SECTION));
+        }
         row++;
       }
 
       if (row < layout.content_h) {
-        char details[4096];
-        snprintf(details, sizeof(details), "URL: %s\nError: %s", run->url, run->error[0] ? run->error : "none");
-        win_draw_wrapped_body_preview(right_win, row, layout.content_h - row, layout.right_w, details,
-                                      &app->history_detail_scroll);
+        win_add_section_title(right_win, row, 0, "Request + Response");
+        row++;
+      }
+
+      if (row < layout.content_h) {
+        char *details = build_history_detail_text(run);
+        if (details == NULL) {
+          const char *fallback = "(history detail unavailable: out of memory)";
+          details = dup_text_n(fallback, strlen(fallback));
+        }
+
+        if (details != NULL) {
+          win_draw_wrapped_body_preview(right_win, row, layout.content_h - row, layout.right_w, details,
+                                        &app->history_detail_scroll);
+          free(details);
+        }
       }
     }
   } else {
@@ -2407,6 +2702,7 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
 
   if (app->main_mode == MAIN_MODE_SEARCH || app->main_mode == MAIN_MODE_REVERSE ||
       app->main_mode == MAIN_MODE_COMMAND) {
+    app->pending_Z = false;
     if (ch == 27) {
       app->main_mode = MAIN_MODE_NORMAL;
       line_reset(app->cmdline, &app->cmdline_len);
@@ -2444,6 +2740,7 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
   }
 
   if (app->main_mode == MAIN_MODE_ACTION) {
+    app->pending_Z = false;
     if (ch == 'y' && selected != NULL) {
       send_request_and_record(app, selected);
       app->main_mode = MAIN_MODE_NORMAL;
@@ -2477,6 +2774,7 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
   }
 
   if (app->main_mode == MAIN_MODE_DELETE_CONFIRM) {
+    app->pending_Z = false;
     if (ch == 'y') {
       size_t old_visible = app->selected_visible;
       char next_select_id[TUIMAN_ID_LEN] = {0};
@@ -2519,6 +2817,15 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
       return;
     }
     return;
+  }
+
+  if (app->pending_Z) {
+    if (ch == 'Z' || ch == 'Q') {
+      *running = false;
+      app->pending_Z = false;
+      return;
+    }
+    app->pending_Z = false;
   }
 
   if (ch == '{') {
@@ -2670,6 +2977,11 @@ static void handle_main_key(app_t *app, bool *running, int ch) {
       app->selected_visible--;
       app->request_body_scroll = 0;
     }
+    return;
+  }
+
+  if (ch == 'Z') {
+    app->pending_Z = true;
     return;
   }
 }

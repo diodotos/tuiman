@@ -12,9 +12,11 @@
 
 ## Next
 
-- Better reverse/fuzzy search behavior for `?` mode.
+- `?` mode fzf-style fuzzy search experience.
+- Dynamic filter-as-you-type behavior; `Enter` locks the filter and returns to normal vim navigation.
 - Rich response inspection (headers/body toggles, paging).
-- Header/query multi-entry editor.
+- Better header editing and preview display.
+- Better query-parameter editing interface.
 - Dedicated auth editor screen with stronger validation.
 
 ## Later

@@ -20,6 +20,7 @@ This is the fresh C rewrite (macOS-first) with:
 - Response preview stores the full response body in memory for scrolling.
 - Body edits validate JSON and auto-format valid JSON.
 - History screen uses the same modernized split-pane style as main/editor.
+- History run detail includes stored request snapshot and response body per run.
 - HTTP execution with `libcurl`.
 - History persistence with `sqlite3`.
 - macOS Keychain-backed secrets via `security` CLI.
