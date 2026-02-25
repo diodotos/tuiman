@@ -1,0 +1,23 @@
+[workspace]
+members = [
+  "apps/tuiman-backend",
+  "crates/tuiman-domain",
+  "crates/tuiman-http",
+  "crates/tuiman-ipc",
+  "crates/tuiman-keychain",
+  "crates/tuiman-storage",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0-alpha.1"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

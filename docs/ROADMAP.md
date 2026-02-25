@@ -1,26 +1,28 @@
 # Roadmap
 
-## v0.1 (current)
+## v0.2 rewrite branch (current)
 
-- C rewrite with vim-like modal flow.
-- Main request list + preview + inline bottom cmd/search line.
-- New-request vim-style editor.
-- HTTP send via `libcurl`.
-- History via `sqlite3`.
-- macOS Keychain secret storage.
-- Export/import directory bundles with secrets excluded.
+- C code removed from `tui-man-rust` in favor of Rust + OpenTUI scaffold.
+- Rust backend workspace + stdio RPC baseline in place.
+- OpenTUI React shell with split-pane visual structure in place.
+- PTY parity checklist established.
 
-## Next
+## Next (parity milestones)
 
-- `?` mode fzf-style fuzzy search experience.
-- Dynamic filter-as-you-type behavior; `Enter` locks the filter and returns to normal vim navigation.
-- Rich response inspection (headers/body toggles, paging).
-- Better header editing and preview display.
-- Better query-parameter editing interface.
-- Dedicated auth editor screen with stronger validation.
+- Complete backend request store parity (read/write/list/delete + defaults).
+- Complete backend history parity (schema/migrations/run snapshots/response body).
+- Implement backend HTTP parity for auth/header/body behavior.
+- Implement full modal frontend parity (`NORMAL`, `ACTION`, `SEARCH`, `COMMAND`, editor/history/help screens).
+- Implement divider drag/resize and body scrolling parity.
+
+## Cleanup and UX refinement
+
+- Improve visual consistency while retaining minimalism.
+- Tighten layout/wrapping behavior on narrow terminals.
+- Add fuzzy search mode and richer response inspection.
 
 ## Later
 
-- Linux and Windows keyring backends.
-- Import/export compatibility helpers.
-- Optional OpenAPI import.
+- Linux and Windows keyring support in backend.
+- OpenAPI import.
+- Release packaging parity for dual binaries (`tuiman`, `tuiman-backend`).

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+BACKEND_PATH="${TUIMAN_BACKEND_PATH:-${ROOT_DIR}/tuiman-backend}"
+FRONTEND_DIR="${ROOT_DIR}/frontend"
+
+if [ ! -x "${BACKEND_PATH}" ]; then
+  echo "Expected executable backend at ${BACKEND_PATH}" >&2
+  exit 1
+fi
+
+if [ ! -f "${FRONTEND_DIR}/src/index.tsx" ]; then
+  echo "Expected frontend sources at ${FRONTEND_DIR}" >&2
+  exit 1
+fi
+
+exec env TUIMAN_BACKEND_PATH="${BACKEND_PATH}" bun run "${FRONTEND_DIR}/src/index.tsx"

@@ -1,6 +1,6 @@
 # Storage
 
-`tuiman` uses local user directories:
+The rewrite keeps the same local paths to preserve compatibility.
 
 - Config root: `~/.config/tuiman/`
 - Requests dir: `~/.config/tuiman/requests/`
@@ -8,9 +8,9 @@
 - History DB: `~/.local/state/tuiman/history.db`
 - Cache root: `~/.cache/tuiman/`
 
-## Request file format
+## Request file format (compatibility target)
 
-Each request is stored as `<request-id>.json` and includes:
+Each request remains `<request-id>.json` with fields:
 
 - `id`, `name`, `method`, `url`
 - `header_key`, `header_value`
@@ -18,21 +18,18 @@ Each request is stored as `<request-id>.json` and includes:
 - `auth_type`, `auth_secret_ref`, `auth_key_name`, `auth_location`, `auth_username`
 - `updated_at`
 
-## History schema
+## History storage
 
-SQLite table `runs` stores:
+Rewrite target keeps SQLite `runs` compatibility:
 
 - request identity (`request_id`, `request_name`)
 - method/url
-- status and duration
+- status/duration
 - error text
 - created timestamp
+- request snapshot and response body
 
-## Export format
+## Current scaffold state
 
-Export writes a directory containing:
-
-- `manifest.json`
-- `requests/*.json`
-
-During export, `auth_secret_ref` is scrubbed from exported request files.
+- Request loading from request JSON files is wired.
+- History loading is stubbed pending SQLite migration in Rust.

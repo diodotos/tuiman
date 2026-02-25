@@ -8,7 +8,7 @@
 
 ## macOS backend
 
-Current implementation uses `/usr/bin/security` with service name `tuiman`:
+Rewrite backend continues to use `/usr/bin/security` with service name `tuiman`:
 
 - Set: `add-generic-password ... -U`
 - Get: `find-generic-password ... -w`
@@ -18,9 +18,8 @@ This is macOS-first and intentionally lightweight.
 
 ## Export behavior
 
-- Export excludes secrets.
-- Export scrubs `auth_secret_ref` in exported request files.
-- Manifest records scrubbed secret ref count.
+- Export parity behavior is a migration target and must remain unchanged.
+- Export excludes secrets and scrubs `auth_secret_ref`.
 
 ## Operational notes
 

@@ -1,132 +1,93 @@
-# tuiman
+# tuiman (Rust + OpenTUI rewrite)
 
-`tuiman` is a lightweight, vim-like terminal API client written in C.
+`tuiman` is being rewritten as:
 
-It is intentionally keyboard-only and modeled after terminal workflows used by tools like vim and mutt/neomutt.
+- Rust backend (`backend/`) for data, HTTP, persistence, and platform services.
+- OpenTUI React frontend (`frontend/`) for terminal UX.
 
-## Quickstart
+The goal remains a vim/mutt-style terminal API client with parity to the stable C line, while improving architecture and visuals.
 
-1) Download the right release archive from GitHub Releases:
+## Current Rewrite Status
 
-- Apple Silicon: `tuiman-<tag>-darwin-arm64.tar.gz`
-- Intel Mac: `tuiman-<tag>-darwin-x86_64.tar.gz`
+This branch now contains the rewrite scaffold and intentionally removes residual C implementation from `tui-man-rust`.
 
-2) Extract and install:
+- C source and CMake build files removed.
+- Rust backend workspace scaffolded with typed crate boundaries.
+- OpenTUI React frontend scaffolded with split-pane visual skeleton and modal keybinding foundation.
+- PTY parity checklist added at `tools/parity/checklist.md`.
 
-```bash
-tar -xzf tuiman-<tag>-darwin-<arch>.tar.gz
-cd tuiman-<tag>-darwin-<arch>
-./install.sh
+Implemented now:
+
+- Backend CLI flags: `--help`, `--version`.
+- Backend stdio JSON-RPC baseline methods: `ping`, `bootstrap`.
+- Frontend bootstraps request list from backend and renders request/preview/response panes.
+
+Not yet migrated:
+
+- Full send/edit/history/auth parity.
+- release packaging for Rust+OpenTUI binaries.
+
+## Repository Layout
+
+```text
+backend/
+  Cargo.toml                 # workspace
+  apps/tuiman-backend/       # stdio RPC backend executable
+  crates/
+    tuiman-domain/           # shared model types
+    tuiman-storage/          # request/history persistence adapters
+    tuiman-http/             # HTTP execution adapter
+    tuiman-keychain/         # macOS keychain integration
+    tuiman-ipc/              # frontend/backend RPC contracts
+
+frontend/
+  package.json               # Bun + OpenTUI React app
+  tsconfig.json
+  src/
+    index.tsx
+    App.tsx
+    rpc/client.ts
+
+tools/parity/
+  checklist.md               # C vs rewrite runtime parity checks
 ```
 
-3) Verify and run:
+## Local Development
+
+### 1) Build backend
 
 ```bash
-tuiman --version
-tuiman
+cd backend
+cargo build -p tuiman-backend
 ```
 
-## Install (GitHub Releases)
-
-Download the matching release archive:
-
-- Apple Silicon: `tuiman-<tag>-darwin-arm64.tar.gz`
-- Intel Mac: `tuiman-<tag>-darwin-x86_64.tar.gz`
-
-Extract and install:
+### 2) Run frontend
 
 ```bash
-tar -xzf tuiman-<tag>-darwin-<arch>.tar.gz
-cd tuiman-<tag>-darwin-<arch>
-./install.sh
+cd frontend
+bun install
+bun run src/index.tsx
 ```
 
-By default this installs to `~/.local/bin/tuiman`.
+If you built the backend in debug mode, frontend uses:
 
-If needed, add `~/.local/bin` to your shell `PATH`:
+- `../backend/target/debug/tuiman-backend`
+
+Override path when needed:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+TUIMAN_BACKEND_PATH=/absolute/path/to/tuiman-backend bun run src/index.tsx
 ```
 
-Verify:
+## Parity Validation Workflow
 
-```bash
-tuiman --version
-```
+Use PTY sessions to validate behavior against the C baseline worktree.
 
-Custom prefix:
+- C baseline binary: `../tui-man/build/tuiman`
+- Rewrite runtime: `frontend/src/index.tsx` + Rust backend
+- Checklist: `tools/parity/checklist.md`
 
-```bash
-TUIMAN_PREFIX=/usr/local ./install.sh
-```
+## Notes
 
-## Development Build
-
-Build from source:
-
-```bash
-cmake -S . -B build
-cmake --build build
-```
-
-Run:
-
-```bash
-./build/tuiman
-```
-
-CLI flags:
-
-```bash
-./build/tuiman --help
-./build/tuiman --version
-```
-
-## Current Status
-
-This is the fresh C rewrite (macOS-first) with:
-
-- Split-pane TUI (`ncurses`) with vim-like modes.
-- Main top split (request list + request preview) plus bottom response pane.
-- Mouse-draggable pane dividers (tmux-style) and keyboard resize nudges.
-- Request definitions stored as JSON files.
-- Request delete from main list with confirmation.
-- Full edit flow for existing requests (`E` key or `:edit`).
-- Editor pane uses the same styled split layout as main and supports mouse divider drag.
-- Method in editor is cycle-only (`h`/`l`) to avoid accidental free-text methods.
-- Preview bodies (request/response/editor/history details) are wrapped and scrollable.
-- Response preview stores the full response body in memory for scrolling.
-- Body edits validate JSON and auto-format valid JSON.
-- History screen uses the same modernized split-pane style as main/editor.
-- History run detail includes stored request snapshot and response body per run.
-- HTTP execution with `libcurl`.
-- History persistence with `sqlite3`.
-- macOS Keychain-backed secrets via `security` CLI.
-- Export/import for request configs with secrets excluded.
-
-## Storage Locations
-
-- Requests/config: `~/.config/tuiman/`
-- History/state: `~/.local/state/tuiman/history.db`
-- Cache: `~/.cache/tuiman/`
-
-## Core Commands
-
-From main `:` command line:
-
-- `:new [METHOD] [URL]`
-- `:edit`
-- `:history`
-- `:export [DIR]`
-- `:import [DIR]`
-- `:help`
-- `:q`
-
-See `docs/` for architecture, keybindings, storage, roadmap, and release-process details.
-
-## Release Automation
-
-- Tag pushes matching `v*` run `.github/workflows/release.yml`.
-- The workflow builds release binaries on macOS Intel + Apple Silicon, smoke-tests `--help`/`--version`, then attaches tarballs and SHA256 files to the GitHub Release.
-- Release tarballs include `install.sh` and `README.md`.
+- OpenTUI uses Bun and may require Zig for native build paths.
+- This branch preserves the stable C line in the separate `tui-man` worktree.

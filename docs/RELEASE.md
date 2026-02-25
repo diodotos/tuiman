@@ -1,57 +1,44 @@
-# Release Process
+# Release Process (rewrite branch)
 
-This project uses a tag-driven release workflow.
+This document is now in transition for Rust + OpenTUI packaging.
 
-## Important: regular pushes vs releases
+## Current state
 
-- Regular pushes to `main` do **not** create a GitHub Release.
-- The release workflow runs when you push a tag matching `v*` (for example `v0.1.0`).
-- You can also run it manually from GitHub Actions (`workflow_dispatch`) for testing.
+- Legacy C release workflow file still exists at `.github/workflows/release.yml` and is obsolete for this branch.
+- Rewrite release automation must package at least:
+  - frontend launch binary/script (`tuiman`)
+  - backend executable (`tuiman-backend`)
+  - `install.sh` and `README.md`
 
-So yes: releases are a distinct process.
+## Rewrite release prerequisites
 
-## Prerequisites
+- `backend` workspace version and `frontend` package version aligned.
+- Backend compiles in release mode.
+- Frontend runtime bootstraps and can reach backend.
+- PTY parity checklist pass for minimum baseline behavior.
 
-- Changes merged into `main`.
-- `CMakeLists.txt` project version matches intended release version.
-- Working tree clean locally.
+## Planned release shape
 
-## Create a release
-
-1. Pull latest `main`:
-
-   ```bash
-   git checkout main
-   git pull --ff-only
-   ```
-
-2. Ensure version is correct in `CMakeLists.txt` (`project(tuiman VERSION x.y.z ...)`).
-
-3. Create and push tag:
+1. Build backend:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   cd backend
+   cargo build --release -p tuiman-backend
    ```
 
-4. Watch GitHub Actions: `Release Build` workflow.
+2. Build frontend runtime entrypoint (strategy pending: Bun script vs compiled launcher).
 
-5. After success, verify release assets exist on GitHub Release page:
-   - `tuiman-<tag>-darwin-x86_64.tar.gz`
-   - `tuiman-<tag>-darwin-arm64.tar.gz`
-   - matching `.sha256` files
-   - each tarball includes `tuiman`, `install.sh`, and `README.md`
+3. Package assets into architecture-specific tarballs.
 
-## What the workflow does
+4. Smoke tests:
 
-- Builds on `macos-15-intel` and `macos-14`.
-- Runs smoke tests:
-  - `./build/tuiman --version`
-  - `./build/tuiman --help`
-- Packages tarballs and SHA256 checksums.
-- Publishes/updates GitHub Release for the tag and uploads assets.
+   - `tuiman --version`
+   - `tuiman-backend --version`
+   - frontend boot + backend bootstrap over RPC
 
-## Troubleshooting
+5. Publish tag-driven GitHub release.
 
-- If workflow fails, fix on `main`, then delete/recreate the tag and push again.
-- If you only need to test workflow logic without a public release, use manual run (`workflow_dispatch`).
+## TODO
+
+- Replace `.github/workflows/release.yml` with Rust/OpenTUI aware pipeline.
+- Update `scripts/install.sh` for dual-binary install.

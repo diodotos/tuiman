@@ -1,4 +1,4 @@
-name: Release Build
+name: Rewrite Release Build
 
 on:
   push:
@@ -19,16 +19,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        run: cmake --build build --config Release
+      - name: Build backend
+        run: cargo build --release -p tuiman-backend
+        working-directory: backend
 
-      - name: Smoke test CLI
+      - name: Smoke test backend CLI
         run: |
-          ./build/tuiman --version
-          ./build/tuiman --help > /tmp/tuiman-help.txt
+          ./backend/target/release/tuiman-backend --version
+          ./backend/target/release/tuiman-backend --help > /tmp/tuiman-help.txt
           grep -q "Usage:" /tmp/tuiman-help.txt
 
       - name: Create tarball + checksum
@@ -40,10 +41,13 @@ jobs:
           NAME="tuiman-${VERSION}-${OS}-${ARCH}"
 
           mkdir -p "dist/${NAME}"
-          cp ./build/tuiman "dist/${NAME}/tuiman"
+          cp ./backend/target/release/tuiman-backend "dist/${NAME}/tuiman-backend"
+          cp ./scripts/tuiman "dist/${NAME}/tuiman"
           cp ./README.md "dist/${NAME}/README.md"
           cp ./scripts/install.sh "dist/${NAME}/install.sh"
+          cp -R ./frontend "dist/${NAME}/frontend"
           chmod +x "dist/${NAME}/install.sh"
+          chmod +x "dist/${NAME}/tuiman"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           shasum -a 256 "dist/${NAME}.tar.gz" > "dist/${NAME}.tar.gz.sha256"
