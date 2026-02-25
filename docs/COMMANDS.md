@@ -18,9 +18,9 @@ Main command line opens with `:` from main screen.
 - `:history`
   - Implemented (opens history screen).
 - `:export [DIR]`
-  - Placeholder status message.
+  - Implemented (writes export bundle with scrubbed secret refs).
 - `:import [DIR]`
-  - Placeholder status message.
+  - Implemented (loads request JSON files from export bundle).
 - `:help`
   - Implemented (opens help screen).
 - `:q`

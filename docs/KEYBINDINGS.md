@@ -6,13 +6,15 @@ This document tracks rewrite keybinding status.
 
 - `j` / `k` and arrow keys: move request selection.
 - `gg` / `G`: jump to top/bottom.
-- `/`: search mode with filter-as-you-type and `Enter` to lock.
+- `/` and `?`: search mode with filter-as-you-type and `Enter` to lock.
+- `n` / `N`: move to next/previous match in current filtered list.
 - `:`: command mode.
 - `Enter`: action row mode.
 - `d`: delete confirmation mode (`y` confirm, `n`/`Esc` cancel).
 - `ZZ` / `ZQ`: quit from normal mode.
 - `H` / `L`: nudge main vertical split.
 - `K` / `J`: nudge main response split.
+- Mouse drag on divider lines resizes splits; clicking near divider also snaps start for drag-poor terminals.
 - `Esc`: clear transient status/filter or cancel active mode.
 - `{` / `}`: request body scroll.
 - `[` / `]`: response body scroll.
@@ -20,7 +22,7 @@ This document tracks rewrite keybinding status.
 Action row currently wired:
 
 - `y`: sends selected request via TypeScript service and records run history.
-- `e`: external body editor placeholder message.
+- `e`: opens body in `$VISUAL`/`$EDITOR`, then validates + formats JSON-like body before save.
 - `a`: opens editor focused on auth fields.
 - `Esc` or `n`: cancel action mode.
 
@@ -31,7 +33,8 @@ Command mode currently wired:
 - `:history`: open history screen.
 - `:help`: open help screen.
 - `:q`: quit.
-- `:import`, `:export`: placeholder status messages.
+- `:export [DIR]`: export requests and scrub secret refs.
+- `:import <DIR>`: import requests from export folder.
 
 Editor screen currently wired:
 
@@ -42,12 +45,14 @@ Editor screen currently wired:
 - `Ctrl+s`: save.
 - `:w`, `:q`, `:wq`: editor command mode.
 - `:secret VALUE`: store Keychain secret for current `Secret Ref`.
+- `e`: open draft body in external editor.
 
 History screen currently wired:
 
 - `j` / `k`: move through runs.
 - `r`: replay selected run.
 - `H` / `L`: resize split.
+- Mouse drag on divider resizes list/detail split.
 - `{` / `}`: scroll detail body.
 - `Esc`: return to main.
 

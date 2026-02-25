@@ -5,15 +5,16 @@
 - C code removed from `tui-man-rust` in favor of TypeScript + OpenTUI rewrite.
 - Single-process service architecture in place (request store, history store, HTTP client, keychain).
 - OpenTUI multi-screen shell (main/editor/history/help) in place.
+- Import/export command path is wired.
+- External body editor path is wired for main action row and editor.
+- JSON validate + pretty-format on save is wired for JSON-like request bodies.
+- Reverse search trigger (`?`) and `n`/`N` navigation are wired.
+- Split-pane mouse drag behavior tightened with divider snap-start handling.
 - PTY parity checklist established.
 
 ## Next (parity milestones)
 
-- Complete import/export parity (`:import`, `:export`).
-- Wire external body editor flow in main action row and editor screen.
-- Add JSON validate + pretty-format on save parity.
-- Tighten mouse drag behavior parity for all split panes.
-- Add reverse/fuzzy search behavior parity (`?`, `n`, `N`).
+- Add true reverse/fuzzy search behavior beyond the shared substring filter engine.
 
 ## Cleanup and UX refinement
 

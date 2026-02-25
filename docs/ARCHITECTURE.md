@@ -31,6 +31,8 @@
   - request execution with auth/header/body behavior and response timing.
 - `frontend/src/services/keychain.ts`
   - macOS Keychain wrapper via `/usr/bin/security`.
+- `frontend/src/services/exportImport.ts`
+  - export bundle generation and import upsert flow.
 - `frontend/src/services/api.ts`
   - service facade consumed by UI.
 

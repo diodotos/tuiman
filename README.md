@@ -13,6 +13,8 @@ The goal stays the same: keep vim/mutt-style terminal minimalism with near-parit
 - Rust/IPC backend path has been dropped in favor of in-process TypeScript services.
 - Main screen, command/search/action/delete flows, editor screen, history screen, and help screen are wired.
 - Request and run persistence are local-first and compatible with the C-line data locations.
+- `:import` / `:export`, external body editor (`e`), and JSON validate+pretty-on-save are wired.
+- Split-pane mouse drag is wired across main/history/editor, with divider snap-start support.
 
 ## Repository Layout
 

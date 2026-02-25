@@ -1,7 +1,21 @@
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { useEffect, useMemo, useState } from "react";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 
-import { bootstrap, deleteRequest, listRequests, listRuns, recordRun, saveRequest, saveSecret, sendRequest } from "./services/api";
+import {
+  bootstrap,
+  deleteRequest,
+  exportRequests,
+  importRequests,
+  listRequests,
+  listRuns,
+  recordRun,
+  saveRequest,
+  saveSecret,
+  sendRequest,
+} from "./services/api";
 import { methodColor, palette } from "./theme";
 import { newRequest, type RequestItem, type RunEntry } from "./types";
 
@@ -9,6 +23,12 @@ type Screen = "MAIN" | "HISTORY" | "EDITOR" | "HELP";
 type MainMode = "NORMAL" | "SEARCH" | "COMMAND" | "ACTION" | "DELETE_CONFIRM";
 type EditorMode = "NORMAL" | "INSERT" | "COMMAND";
 type DragMode = "NONE" | "MAIN_VERTICAL" | "MAIN_HORIZONTAL" | "HISTORY_VERTICAL" | "EDITOR_VERTICAL";
+
+type MouseLikeEvent = {
+  x?: number;
+  y?: number;
+  preventDefault?: () => void;
+};
 
 type ResponsePreview = {
   requestName: string;
@@ -58,10 +78,19 @@ const EDITOR_FIELDS: EditorField[] = [
 const AUTH_FIELD_INDEX = 5;
 
 const MAIN_STATUS_HINT =
-  "j/k move | / search | : command | Enter actions | E edit | d delete | ZZ/ZQ quit | { } req body | [ ] resp body | drag";
+  "j/k move | / ? search | n/N next/prev | : command | Enter actions | E edit | d delete | ZZ/ZQ quit | { } req body | [ ] resp body | drag";
 
 const HISTORY_STATUS_HINT = "j/k move | r replay | H/L resize | { } detail | mouse drag | Esc back";
 const EDITOR_STATUS_HINT = "j/k field | h/l method | i edit | : cmd | Ctrl+s save | Esc cancel | { } body";
+
+const MAIN_MIN_LEFT_COLS = 20;
+const MAIN_MIN_RIGHT_COLS = 12;
+const HISTORY_MIN_LEFT_COLS = 22;
+const HISTORY_MIN_RIGHT_COLS = 20;
+const EDITOR_MIN_LEFT_COLS = 24;
+const EDITOR_MIN_RIGHT_COLS = 18;
+const MAIN_MIN_TOP_ROWS = 8;
+const MAIN_MIN_BOTTOM_ROWS = 6;
 
 function trimTo(text: string, width: number): string {
   if (text.length <= width) {
@@ -102,6 +131,45 @@ function nowIsoNoMillis(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+function maybePrettyJsonBody(body: string): { ok: true; body: string } | { ok: false; error: string } {
+  const trimmed = body.trimStart();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return { ok: true, body };
+  }
+
+  try {
+    const parsed = JSON.parse(body);
+    return { ok: true, body: JSON.stringify(parsed, null, 2) };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "invalid JSON body",
+    };
+  }
+}
+
+async function editTextInExternalEditor(initial: string, extension = "txt"): Promise<string | null> {
+  const base = `tuiman-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+  const path = join(tmpdir(), base);
+  const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+  writeFileSync(path, initial, "utf8");
+
+  try {
+    const proc = Bun.spawnSync(["sh", "-lc", `${editor} "$1"`, "sh", path], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+
+    if (proc.exitCode !== 0) {
+      return null;
+    }
+    return readFileSync(path, "utf8");
+  } finally {
+    rmSync(path, { force: true });
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -140,9 +208,9 @@ function editorPrompt(mode: EditorMode, input: string, commandInput: string, cur
   return EDITOR_STATUS_HINT;
 }
 
-function mainPrompt(mode: MainMode, commandInput: string, searchInput: string, deleteName: string): string {
+function mainPrompt(mode: MainMode, commandInput: string, searchInput: string, searchPrefix: "/" | "?", deleteName: string): string {
   if (mode === "SEARCH") {
-    return `/${searchInput}`;
+    return `${searchPrefix}${searchInput}`;
   }
   if (mode === "COMMAND") {
     return `:${commandInput}`;
@@ -180,6 +248,7 @@ export function App() {
   const [filter, setFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [searchSnapshot, setSearchSnapshot] = useState("");
+  const [searchPrefix, setSearchPrefix] = useState<"/" | "?">("/");
   const [commandInput, setCommandInput] = useState("");
 
   const [historyRuns, setHistoryRuns] = useState<RunEntry[]>([]);
@@ -324,13 +393,96 @@ export function App() {
       return;
     }
 
+    const maybeFormatted = maybePrettyJsonBody(editorDraft.body);
+    if (!maybeFormatted.ok) {
+      setStatusError(`Body JSON invalid: ${maybeFormatted.error}`);
+      return;
+    }
+
     try {
-      const saved = await saveRequest(editorDraft);
+      const saved = await saveRequest({
+        ...editorDraft,
+        body: maybeFormatted.body,
+      });
       await reloadRequests(saved.id);
       closeEditorWithStatus(`Saved ${saved.name}.`);
     } catch (err) {
       closeEditorWithStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`, true);
     }
+  }
+
+  async function editSelectedBodyExternally(): Promise<void> {
+    if (!selectedItem) {
+      setStatusError("No selected request for body edit.");
+      return;
+    }
+
+    renderer.suspend();
+    let edited: string | null = null;
+    try {
+      edited = await editTextInExternalEditor(selectedItem.body || "", "json");
+    } finally {
+      renderer.resume();
+    }
+
+    if (edited == null) {
+      setStatusError("External editor exited non-zero.");
+      return;
+    }
+
+    const maybeFormatted = maybePrettyJsonBody(edited);
+    if (!maybeFormatted.ok) {
+      setStatusError(`Body JSON invalid: ${maybeFormatted.error}`);
+      return;
+    }
+
+    try {
+      const saved = await saveRequest({
+        ...selectedItem,
+        body: maybeFormatted.body,
+      });
+      await reloadRequests(saved.id);
+      setStatusInfo(`Body updated for ${saved.name}.`);
+    } catch (err) {
+      setStatusError(`Body save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function editDraftBodyExternally(): Promise<void> {
+    if (!editorDraft) {
+      setStatusError("No editor draft for body edit.");
+      return;
+    }
+
+    renderer.suspend();
+    let edited: string | null = null;
+    try {
+      edited = await editTextInExternalEditor(editorDraft.body || "", "json");
+    } finally {
+      renderer.resume();
+    }
+
+    if (edited == null) {
+      setStatusError("External editor exited non-zero.");
+      return;
+    }
+
+    const maybeFormatted = maybePrettyJsonBody(edited);
+    if (!maybeFormatted.ok) {
+      setStatusError(`Body JSON invalid: ${maybeFormatted.error}`);
+      return;
+    }
+
+    setEditorDraft((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        body: maybeFormatted.body,
+      };
+    });
+    setStatusInfo("Editor body updated from external editor.");
   }
 
   async function executeMainCommand(raw: string): Promise<void> {
@@ -381,8 +533,30 @@ export function App() {
       return;
     }
 
-    if (cmd === "import" || cmd === "export") {
-      setStatusInfo(`${cmd} parity is planned in upcoming backend migration steps.`);
+    if (cmd === "export") {
+      try {
+        const dirArg = parts.slice(1).join(" ").trim();
+        const result = await exportRequests(dirArg || undefined);
+        setStatusInfo(`Exported ${result.count} request(s) to ${result.directory} (scrubbed ${result.scrubbed} secret ref(s)).`);
+      } catch (err) {
+        setStatusError(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    if (cmd === "import") {
+      const dirArg = parts.slice(1).join(" ").trim();
+      if (!dirArg) {
+        setStatusError("Usage: :import <directory>");
+        return;
+      }
+      try {
+        const result = await importRequests(dirArg);
+        await reloadRequests();
+        setStatusInfo(`Imported ${result.imported} request(s) from ${dirArg}.`);
+      } catch (err) {
+        setStatusError(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       return;
     }
 
@@ -466,49 +640,103 @@ export function App() {
     }
   }
 
-  function beginDrag(next: DragMode): void {
+  function setMainVerticalRatioFromX(x: number): void {
+    const left = clamp(Math.round(x), MAIN_MIN_LEFT_COLS, Math.max(MAIN_MIN_LEFT_COLS, termWidth - MAIN_MIN_RIGHT_COLS - 1));
+    const ratio = left / Math.max(termWidth, 1);
+    setMainSplitRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
+  }
+
+  function setMainHorizontalRatioFromY(y: number): void {
+    const localRow = clamp(Math.round(y) - 1, 1, contentRows);
+    const bottom = clamp(contentRows - localRow, MAIN_MIN_BOTTOM_ROWS, Math.max(MAIN_MIN_BOTTOM_ROWS, contentRows - MAIN_MIN_TOP_ROWS - 1));
+    const ratio = bottom / Math.max(contentRows, 1);
+    setMainResponseRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
+  }
+
+  function setHistoryVerticalRatioFromX(x: number): void {
+    const left = clamp(
+      Math.round(x),
+      HISTORY_MIN_LEFT_COLS,
+      Math.max(HISTORY_MIN_LEFT_COLS, termWidth - HISTORY_MIN_RIGHT_COLS - 1),
+    );
+    const ratio = left / Math.max(termWidth, 1);
+    setHistorySplitRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
+  }
+
+  function setEditorVerticalRatioFromX(x: number): void {
+    const left = clamp(
+      Math.round(x),
+      EDITOR_MIN_LEFT_COLS,
+      Math.max(EDITOR_MIN_LEFT_COLS, termWidth - EDITOR_MIN_RIGHT_COLS - 1),
+    );
+    const ratio = left / Math.max(termWidth, 1);
+    setEditorSplitRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
+  }
+
+  function applyDrag(modeValue: DragMode, event: MouseLikeEvent): void {
+    if (termWidth <= 0 || termHeight <= 0) {
+      return;
+    }
+    const x = event.x ?? 0;
+    const y = event.y ?? 0;
+
+    if (modeValue === "MAIN_VERTICAL") {
+      setMainVerticalRatioFromX(x);
+      return;
+    }
+    if (modeValue === "MAIN_HORIZONTAL") {
+      setMainHorizontalRatioFromY(y);
+      return;
+    }
+    if (modeValue === "HISTORY_VERTICAL") {
+      setHistoryVerticalRatioFromX(x);
+      return;
+    }
+    if (modeValue === "EDITOR_VERTICAL") {
+      setEditorVerticalRatioFromX(x);
+    }
+  }
+
+  function beginDrag(next: DragMode, event?: MouseLikeEvent): void {
+    event?.preventDefault?.();
     setDragMode(next);
+    if (next === "MAIN_VERTICAL" || next === "MAIN_HORIZONTAL") {
+      setStatusInfo("Dragging main pane divider...");
+    } else if (next === "HISTORY_VERTICAL") {
+      setStatusInfo("Dragging history divider...");
+    } else if (next === "EDITOR_VERTICAL") {
+      setStatusInfo("Dragging editor divider...");
+    }
+    if (event && (event.x != null || event.y != null)) {
+      applyDrag(next, event);
+    }
   }
 
   function stopDrag(): void {
     if (dragMode !== "NONE") {
+      if (dragMode === "MAIN_VERTICAL" || dragMode === "MAIN_HORIZONTAL") {
+        setStatusInfo(`Resize: left=${mainLeftCols} cols response=${responseRows} rows`);
+      } else if (dragMode === "HISTORY_VERTICAL") {
+        setStatusInfo(`History resize: left=${historyLeftCols} cols`);
+      } else if (dragMode === "EDITOR_VERTICAL") {
+        setStatusInfo(`Editor resize: left=${editorLeftCols} cols`);
+      }
       setDragMode("NONE");
     }
   }
 
-  function handleMouseDrag(event: { x?: number; y?: number }): void {
-    const x = event.x ?? 0;
-    const y = event.y ?? 0;
-    if (termWidth <= 0 || termHeight <= 0) {
+  function handleMouseDrag(event: MouseLikeEvent): void {
+    if (dragMode === "NONE") {
       return;
     }
+    applyDrag(dragMode, event);
+  }
 
-    if (dragMode === "MAIN_VERTICAL") {
-      const ratio = clamp(x / termWidth, 0.2, 0.8);
-      setMainSplitRatio(ratio);
-      setStatusInfo(`Resize: left=${Math.round(ratio * 100)}% response=${Math.round(mainResponseRatio * 100)}%`);
+  function handleMouseMove(event: MouseLikeEvent): void {
+    if (dragMode === "NONE") {
       return;
     }
-
-    if (dragMode === "MAIN_HORIZONTAL") {
-      const responseRatio = clamp((termHeight - y) / termHeight, 0.15, 0.7);
-      setMainResponseRatio(responseRatio);
-      setStatusInfo(`Resize: left=${Math.round(mainSplitRatio * 100)}% response=${Math.round(responseRatio * 100)}%`);
-      return;
-    }
-
-    if (dragMode === "HISTORY_VERTICAL") {
-      const ratio = clamp(x / termWidth, 0.24, 0.76);
-      setHistorySplitRatio(ratio);
-      setStatusInfo(`History resize: left=${Math.round(ratio * 100)}%`);
-      return;
-    }
-
-    if (dragMode === "EDITOR_VERTICAL") {
-      const ratio = clamp(x / termWidth, 0.28, 0.78);
-      setEditorSplitRatio(ratio);
-      setStatusInfo(`Editor resize: left=${Math.round(ratio * 100)}%`);
-    }
+    applyDrag(dragMode, event);
   }
 
   useKeyboard((key) => {
@@ -541,11 +769,15 @@ export function App() {
         return;
       }
       if (ch === "H") {
-        setHistorySplitRatio((prev) => clamp(prev - 0.03, 0.24, 0.76));
+        const nextLeft = clamp(historyLeftCols - 1, HISTORY_MIN_LEFT_COLS, historyMaxLeftCols);
+        setHistorySplitRatio(nextLeft / Math.max(termWidth, 1));
+        setStatusInfo(`History resize: left=${nextLeft} cols`);
         return;
       }
       if (ch === "L") {
-        setHistorySplitRatio((prev) => clamp(prev + 0.03, 0.24, 0.76));
+        const nextLeft = clamp(historyLeftCols + 1, HISTORY_MIN_LEFT_COLS, historyMaxLeftCols);
+        setHistorySplitRatio(nextLeft / Math.max(termWidth, 1));
+        setStatusInfo(`History resize: left=${nextLeft} cols`);
         return;
       }
       if (ch === "{") {
@@ -689,7 +921,7 @@ export function App() {
         return;
       }
       if (ch === "e") {
-        setStatusInfo("External body editor will be wired next.");
+        void editDraftBodyExternally();
         return;
       }
       if (ch === "{") {
@@ -770,7 +1002,7 @@ export function App() {
       }
       if (ch === "e") {
         setMode("NORMAL");
-        setStatusInfo("Body external editor wiring pending.");
+        void editSelectedBodyExternally();
         return;
       }
       if (ch === "a") {
@@ -837,19 +1069,27 @@ export function App() {
     }
 
     if (ch === "H") {
-      setMainSplitRatio((prev) => clamp(prev - 0.03, 0.2, 0.8));
+      const nextLeft = clamp(mainLeftCols - 1, MAIN_MIN_LEFT_COLS, mainMaxLeftCols);
+      setMainSplitRatio(nextLeft / Math.max(termWidth, 1));
+      setStatusInfo(`Resize: left=${nextLeft} cols response=${responseRows} rows`);
       return;
     }
     if (ch === "L") {
-      setMainSplitRatio((prev) => clamp(prev + 0.03, 0.2, 0.8));
+      const nextLeft = clamp(mainLeftCols + 1, MAIN_MIN_LEFT_COLS, mainMaxLeftCols);
+      setMainSplitRatio(nextLeft / Math.max(termWidth, 1));
+      setStatusInfo(`Resize: left=${nextLeft} cols response=${responseRows} rows`);
       return;
     }
     if (ch === "K") {
-      setMainResponseRatio((prev) => clamp(prev - 0.03, 0.15, 0.7));
+      const nextRows = clamp(responseRows - 1, MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
+      setMainResponseRatio(nextRows / Math.max(contentRows, 1));
+      setStatusInfo(`Resize: left=${mainLeftCols} cols response=${nextRows} rows`);
       return;
     }
     if (ch === "J") {
-      setMainResponseRatio((prev) => clamp(prev + 0.03, 0.15, 0.7));
+      const nextRows = clamp(responseRows + 1, MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
+      setMainResponseRatio(nextRows / Math.max(contentRows, 1));
+      setStatusInfo(`Resize: left=${mainLeftCols} cols response=${nextRows} rows`);
       return;
     }
 
@@ -874,9 +1114,35 @@ export function App() {
     if (ch === "/") {
       setSearchSnapshot(filter);
       setSearchInput(filter);
+      setSearchPrefix("/");
       setMode("SEARCH");
       return;
     }
+    if (ch === "?") {
+      setSearchSnapshot(filter);
+      setSearchInput(filter);
+      setSearchPrefix("?");
+      setMode("SEARCH");
+      return;
+    }
+
+    if (ch === "n") {
+      if (visible.length === 0) {
+        setStatusError("No search matches.");
+      } else {
+        setSelected((prev) => (prev + 1) % visible.length);
+      }
+      return;
+    }
+    if (ch === "N") {
+      if (visible.length === 0) {
+        setStatusError("No search matches.");
+      } else {
+        setSelected((prev) => (prev - 1 + visible.length) % visible.length);
+      }
+      return;
+    }
+
     if (ch === ":") {
       setCommandInput("");
       setMode("COMMAND");
@@ -928,18 +1194,67 @@ export function App() {
   const showHistoryRight = termWidth >= 84;
   const showEditorRight = termWidth >= 90;
 
-  const mainLeftPct = Math.round(mainSplitRatio * 100);
-  const historyLeftPct = Math.round(historySplitRatio * 100);
-  const editorLeftPct = Math.round(editorSplitRatio * 100);
+  const contentRows = Math.max(10, termHeight - 3);
+  const maxResponseRows = Math.max(MAIN_MIN_BOTTOM_ROWS, contentRows - MAIN_MIN_TOP_ROWS - 1);
+  const responseRows = clamp(Math.round(mainResponseRatio * contentRows), MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
+  const topRows = Math.max(MAIN_MIN_TOP_ROWS, contentRows - responseRows - 1);
 
-  const topGrow = Math.max(1, 100 - Math.round(mainResponseRatio * 100));
-  const bottomGrow = Math.max(1, Math.round(mainResponseRatio * 100));
+  const mainMaxLeftCols = Math.max(MAIN_MIN_LEFT_COLS, termWidth - MAIN_MIN_RIGHT_COLS - 1);
+  const mainLeftCols = clamp(Math.round(mainSplitRatio * termWidth), MAIN_MIN_LEFT_COLS, mainMaxLeftCols);
+  const mainRightCols = Math.max(MAIN_MIN_RIGHT_COLS, termWidth - mainLeftCols - 1);
+
+  const historyMaxLeftCols = Math.max(HISTORY_MIN_LEFT_COLS, termWidth - HISTORY_MIN_RIGHT_COLS - 1);
+  const historyLeftCols = clamp(Math.round(historySplitRatio * termWidth), HISTORY_MIN_LEFT_COLS, historyMaxLeftCols);
+  const historyRightCols = Math.max(HISTORY_MIN_RIGHT_COLS, termWidth - historyLeftCols - 1);
+
+  const editorMaxLeftCols = Math.max(EDITOR_MIN_LEFT_COLS, termWidth - EDITOR_MIN_RIGHT_COLS - 1);
+  const editorLeftCols = clamp(Math.round(editorSplitRatio * termWidth), EDITOR_MIN_LEFT_COLS, editorMaxLeftCols);
+  const editorRightCols = Math.max(EDITOR_MIN_RIGHT_COLS, termWidth - editorLeftCols - 1);
+
+  function handleRootMouseDown(event: MouseLikeEvent): void {
+    if (dragMode !== "NONE") {
+      return;
+    }
+    const x = event.x ?? 0;
+    const y = event.y ?? 0;
+
+    if (screen === "MAIN") {
+      if (showMainRight) {
+        const dividerX = mainLeftCols + 1;
+        if (Math.abs(x - dividerX) <= 1) {
+          beginDrag("MAIN_VERTICAL", event);
+          return;
+        }
+      }
+
+      const dividerY = 1 + topRows + 1;
+      if (Math.abs(y - dividerY) <= 1) {
+        beginDrag("MAIN_HORIZONTAL", event);
+        return;
+      }
+    }
+
+    if (screen === "HISTORY" && showHistoryRight) {
+      const dividerX = historyLeftCols + 1;
+      if (Math.abs(x - dividerX) <= 1) {
+        beginDrag("HISTORY_VERTICAL", event);
+        return;
+      }
+    }
+
+    if (screen === "EDITOR" && showEditorRight) {
+      const dividerX = editorLeftCols + 1;
+      if (Math.abs(x - dividerX) <= 1) {
+        beginDrag("EDITOR_VERTICAL", event);
+      }
+    }
+  }
 
   function renderMainScreen() {
     return (
       <box flexGrow={1} flexDirection="column">
-        <box flexGrow={topGrow} flexDirection="row" border borderColor={palette.border}>
-          <box width={showMainRight ? `${mainLeftPct}%` : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+        <box height={topRows} flexDirection="row" border borderColor={palette.border}>
+          <box width={showMainRight ? mainLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
             <text fg={palette.section}>Requests</text>
             <text fg={palette.hint}>{trimTo(`Filter: ${filter || "(none)"}`, 64)}</text>
             <scrollbox flexGrow={1} marginTop={1}>
@@ -961,15 +1276,14 @@ export function App() {
             <box
               width={1}
               backgroundColor={palette.border}
-              onMouseDown={() => beginDrag("MAIN_VERTICAL")}
-              onMouseDrag={() => beginDrag("MAIN_VERTICAL")}
+              onMouseDown={(event) => beginDrag("MAIN_VERTICAL", event)}
             >
               <text fg={palette.bg}>|</text>
             </box>
           ) : null}
 
           {showMainRight ? (
-            <box flexGrow={1} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+            <box width={mainRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
               <text fg={palette.section}>Request Preview</text>
               {selectedItem ? (
                 <box marginTop={1} flexDirection="column" gap={0}>
@@ -1000,13 +1314,12 @@ export function App() {
         <box
           height={1}
           backgroundColor={palette.border}
-          onMouseDown={() => beginDrag("MAIN_HORIZONTAL")}
-          onMouseDrag={() => beginDrag("MAIN_HORIZONTAL")}
+          onMouseDown={(event) => beginDrag("MAIN_HORIZONTAL", event)}
         >
           <text fg={palette.bg}>-</text>
         </box>
 
-        <box flexGrow={bottomGrow} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+        <box height={responseRows} border borderColor={palette.border} paddingX={1} paddingTop={1}>
           <text fg={palette.section}>Response</text>
           {lastResponse ? (
             <box flexDirection="column">
@@ -1048,7 +1361,7 @@ export function App() {
   function renderHistoryScreen() {
     return (
       <box flexGrow={1} border borderColor={palette.border} flexDirection="row">
-        <box width={showHistoryRight ? `${historyLeftPct}%` : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+        <box width={showHistoryRight ? historyLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
           <text fg={palette.section}>History</text>
           <scrollbox flexGrow={1} marginTop={1}>
             {historyRuns.map((run, idx) => {
@@ -1068,13 +1381,13 @@ export function App() {
         </box>
 
         {showHistoryRight ? (
-          <box width={1} backgroundColor={palette.border} onMouseDown={() => beginDrag("HISTORY_VERTICAL")}>
+          <box width={1} backgroundColor={palette.border} onMouseDown={(event) => beginDrag("HISTORY_VERTICAL", event)}>
             <text fg={palette.bg}>|</text>
           </box>
         ) : null}
 
         {showHistoryRight ? (
-          <box flexGrow={1} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+          <box width={historyRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
             <text fg={palette.section}>Run Detail</text>
             {selectedRun ? (
               <box flexDirection="column">
@@ -1115,7 +1428,7 @@ export function App() {
     const currentField = EDITOR_FIELDS[editorField];
     return (
       <box flexGrow={1} border borderColor={palette.border} flexDirection="row">
-        <box width={showEditorRight ? `${editorLeftPct}%` : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+        <box width={showEditorRight ? editorLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
           <text fg={palette.section}>Editor</text>
           {draft ? (
             <scrollbox flexGrow={1} marginTop={1}>
@@ -1138,13 +1451,13 @@ export function App() {
         </box>
 
         {showEditorRight ? (
-          <box width={1} backgroundColor={palette.border} onMouseDown={() => beginDrag("EDITOR_VERTICAL")}>
+          <box width={1} backgroundColor={palette.border} onMouseDown={(event) => beginDrag("EDITOR_VERTICAL", event)}>
             <text fg={palette.bg}>|</text>
           </box>
         ) : null}
 
         {showEditorRight && draft ? (
-          <box flexGrow={1} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+          <box width={editorRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
             <text fg={palette.section}>Preview</text>
             <box marginTop={1} flexDirection="column">
               <text>
@@ -1177,8 +1490,8 @@ export function App() {
         <text fg={palette.section}>Help</text>
         <scrollbox flexGrow={1} marginTop={1}>
           <text fg={palette.hint}>Main:</text>
-          <text fg={palette.hint}>  j/k, gg/G, Enter, /, :, d, E, ZZ/ZQ, H/L, K/J, {'{'} {'}'}, [ ]</text>
-          <text fg={palette.hint}>Action: y send, e body edit (pending), a auth editor, Esc/n cancel</text>
+          <text fg={palette.hint}>  j/k, gg/G, Enter, /, ?, n/N, :, d, E, ZZ/ZQ, H/L, K/J, {'{'} {'}'}, [ ]</text>
+          <text fg={palette.hint}>Action: y send, e body edit, a auth editor, Esc/n cancel</text>
           <text fg={palette.hint}>History: j/k, r replay, H/L, {'{'} {'}'}, Esc</text>
           <text fg={palette.hint}>Editor: j/k, h/l method, i/Enter edit, :w/:q/:wq, Ctrl+s, Esc</text>
           <text fg={palette.hint}>Press Esc to return.</text>
@@ -1192,7 +1505,7 @@ export function App() {
 
   if (screen === "MAIN") {
     modeLabel = `[MAIN ${mode}]`;
-    prompt = mainPrompt(mode, commandInput, searchInput, selectedItem?.name ?? "");
+    prompt = mainPrompt(mode, commandInput, searchInput, searchPrefix, selectedItem?.name ?? "");
   } else if (screen === "HISTORY") {
     modeLabel = "[HISTORY]";
     prompt = HISTORY_STATUS_HINT;
@@ -1211,7 +1524,9 @@ export function App() {
       height="100%"
       backgroundColor={palette.bg}
       flexDirection="column"
+      onMouseDown={handleRootMouseDown}
       onMouseDrag={handleMouseDrag}
+      onMouseMove={handleMouseMove}
       onMouseUp={stopDrag}
       onMouseDragEnd={stopDrag}
       onMouseDrop={stopDrag}

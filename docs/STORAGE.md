@@ -34,3 +34,9 @@ Rewrite target keeps SQLite `runs` compatibility:
 - Request load/save/delete is wired via TypeScript service modules.
 - History load/record is wired via `bun:sqlite` service modules and schema migration.
 - Main action-row send path now records request snapshot + response body per run.
+
+## Export/import format
+
+- Export writes `<dir>/manifest.json` and `<dir>/requests/*.json`.
+- Export scrubs `auth_secret_ref` from request JSON files.
+- Import reads `<dir>/requests/*.json` and upserts requests locally.

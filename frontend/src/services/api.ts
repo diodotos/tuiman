@@ -2,6 +2,7 @@ import { listRequests as listRequestsImpl, saveRequest as saveRequestImpl, delet
 import { listRuns as listRunsImpl, recordRun as recordRunImpl } from "./historyStore";
 import { sendRequest as sendRequestImpl, type HttpResponse } from "./httpClient";
 import { setSecret } from "./keychain";
+import { exportRequests as exportRequestsImpl, importRequests as importRequestsImpl } from "./exportImport";
 import type { BootstrapPayload, RequestItem, RunEntry } from "../types";
 
 export { type HttpResponse };
@@ -37,4 +38,12 @@ export async function sendRequest(request: RequestItem): Promise<HttpResponse> {
 
 export async function saveSecret(secretRef: string, value: string): Promise<void> {
   await setSecret(secretRef, value);
+}
+
+export async function exportRequests(dir?: string): Promise<{ directory: string; count: number; scrubbed: number }> {
+  return exportRequestsImpl(dir);
+}
+
+export async function importRequests(dir: string): Promise<{ imported: number }> {
+  return importRequestsImpl(dir);
 }
