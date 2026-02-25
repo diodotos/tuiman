@@ -39,6 +39,13 @@ Run:
 ./build/tuiman
 ```
 
+CLI flags:
+
+```bash
+./build/tuiman --help
+./build/tuiman --version
+```
+
 ## Storage locations
 
 - Requests/config: `~/.config/tuiman/`
@@ -57,4 +64,9 @@ From main `:` command line:
 - `:help`
 - `:q`
 
-See the `docs/` folder for architecture, keybindings, storage, and roadmap details.
+See the `docs/` folder for architecture, keybindings, storage, roadmap, and release-process details.
+
+## Release automation
+
+- Tag pushes matching `v*` run `.github/workflows/release.yml`.
+- The workflow builds release binaries on macOS Intel + Apple Silicon, smoke-tests `--help`/`--version`, then attaches tarballs and SHA256 files to the GitHub Release.

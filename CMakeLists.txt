@@ -39,6 +39,8 @@ target_link_libraries(tuiman PRIVATE
   CURL::libcurl
 )
 
+target_compile_definitions(tuiman PRIVATE TUIMAN_VERSION="${PROJECT_VERSION}")
+
 if(APPLE)
   target_compile_definitions(tuiman PRIVATE TUIMAN_PLATFORM_MACOS=1)
   target_link_libraries(tuiman PRIVATE "-framework Foundation")

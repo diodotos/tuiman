@@ -17,6 +17,10 @@
 #include "tuiman/paths.h"
 #include "tuiman/request_store.h"
 
+#ifndef TUIMAN_VERSION
+#define TUIMAN_VERSION "dev"
+#endif
+
 #define CMDLINE_MAX 256
 #define STATUS_MAX 512
 #define DEFAULT_MAIN_STATUS \
@@ -3376,7 +3380,32 @@ static void init_colors(void) {
   init_pair(COLOR_SECTION, COLOR_BLUE, COLOR_BLACK);
 }
 
-int main(void) {
+static void print_cli_help(FILE *out, const char *argv0) {
+  const char *prog = (argv0 != NULL && argv0[0] != '\0') ? argv0 : "tuiman";
+  fprintf(out, "tuiman %s\n", TUIMAN_VERSION);
+  fprintf(out, "Usage: %s [--help] [--version]\n\n", prog);
+  fprintf(out, "Options:\n");
+  fprintf(out, "  -h, --help     Show this help and exit\n");
+  fprintf(out, "  -v, --version  Show version and exit\n");
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1) {
+    if (argc == 2 &&
+        (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "version") == 0)) {
+      printf("%s\n", TUIMAN_VERSION);
+      return 0;
+    }
+    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "help") == 0)) {
+      print_cli_help(stdout, argv[0]);
+      return 0;
+    }
+
+    fprintf(stderr, "Unknown argument\n\n");
+    print_cli_help(stderr, argv[0]);
+    return 2;
+  }
+
   app_t app;
   memset(&app, 0, sizeof(app));
   app.split_ratio = 0.66;
