@@ -64,9 +64,10 @@ From main `:` command line:
 - `:help`
 - `:q`
 
-See the `docs/` folder for architecture, keybindings, storage, roadmap, and release-process details.
+See the `docs/` folder for architecture, keybindings, storage, roadmap, install, and release-process details.
 
 ## Release automation
 
 - Tag pushes matching `v*` run `.github/workflows/release.yml`.
 - The workflow builds release binaries on macOS Intel + Apple Silicon, smoke-tests `--help`/`--version`, then attaches tarballs and SHA256 files to the GitHub Release.
+- Release tarballs include `install.sh` for installing into `PATH` (`~/.local/bin` by default).

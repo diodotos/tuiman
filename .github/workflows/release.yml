@@ -42,6 +42,9 @@ jobs:
           mkdir -p "dist/${NAME}"
           cp ./build/tuiman "dist/${NAME}/tuiman"
           cp ./README.md "dist/${NAME}/README.md"
+          cp ./docs/INSTALL.md "dist/${NAME}/INSTALL.md"
+          cp ./scripts/install.sh "dist/${NAME}/install.sh"
+          chmod +x "dist/${NAME}/install.sh"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           shasum -a 256 "dist/${NAME}.tar.gz" > "dist/${NAME}.tar.gz.sha256"
