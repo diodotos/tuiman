@@ -4,7 +4,86 @@
 
 It is intentionally keyboard-only and modeled after terminal workflows used by tools like vim and mutt/neomutt.
 
-## Current status
+## Quickstart
+
+1) Download the right release archive from GitHub Releases:
+
+- Apple Silicon: `tuiman-<tag>-darwin-arm64.tar.gz`
+- Intel Mac: `tuiman-<tag>-darwin-x86_64.tar.gz`
+
+2) Extract and install:
+
+```bash
+tar -xzf tuiman-<tag>-darwin-<arch>.tar.gz
+cd tuiman-<tag>-darwin-<arch>
+./install.sh
+```
+
+3) Verify and run:
+
+```bash
+tuiman --version
+tuiman
+```
+
+## Install (GitHub Releases)
+
+Download the matching release archive:
+
+- Apple Silicon: `tuiman-<tag>-darwin-arm64.tar.gz`
+- Intel Mac: `tuiman-<tag>-darwin-x86_64.tar.gz`
+
+Extract and install:
+
+```bash
+tar -xzf tuiman-<tag>-darwin-<arch>.tar.gz
+cd tuiman-<tag>-darwin-<arch>
+./install.sh
+```
+
+By default this installs to `~/.local/bin/tuiman`.
+
+If needed, add `~/.local/bin` to your shell `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Verify:
+
+```bash
+tuiman --version
+```
+
+Custom prefix:
+
+```bash
+TUIMAN_PREFIX=/usr/local ./install.sh
+```
+
+## Development Build
+
+Build from source:
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Run:
+
+```bash
+./build/tuiman
+```
+
+CLI flags:
+
+```bash
+./build/tuiman --help
+./build/tuiman --version
+```
+
+## Current Status
 
 This is the fresh C rewrite (macOS-first) with:
 
@@ -26,33 +105,13 @@ This is the fresh C rewrite (macOS-first) with:
 - macOS Keychain-backed secrets via `security` CLI.
 - Export/import for request configs with secrets excluded.
 
-## Build
-
-```bash
-cmake -S . -B build
-cmake --build build
-```
-
-Run:
-
-```bash
-./build/tuiman
-```
-
-CLI flags:
-
-```bash
-./build/tuiman --help
-./build/tuiman --version
-```
-
-## Storage locations
+## Storage Locations
 
 - Requests/config: `~/.config/tuiman/`
 - History/state: `~/.local/state/tuiman/history.db`
 - Cache: `~/.cache/tuiman/`
 
-## Core commands
+## Core Commands
 
 From main `:` command line:
 
@@ -64,10 +123,10 @@ From main `:` command line:
 - `:help`
 - `:q`
 
-See the `docs/` folder for architecture, keybindings, storage, roadmap, install, and release-process details.
+See `docs/` for architecture, keybindings, storage, roadmap, and release-process details.
 
-## Release automation
+## Release Automation
 
 - Tag pushes matching `v*` run `.github/workflows/release.yml`.
 - The workflow builds release binaries on macOS Intel + Apple Silicon, smoke-tests `--help`/`--version`, then attaches tarballs and SHA256 files to the GitHub Release.
-- Release tarballs include `install.sh` for installing into `PATH` (`~/.local/bin` by default).
+- Release tarballs include `install.sh` and `README.md`.

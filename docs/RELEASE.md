@@ -40,7 +40,7 @@ So yes: releases are a distinct process.
    - `tuiman-<tag>-darwin-x86_64.tar.gz`
    - `tuiman-<tag>-darwin-arm64.tar.gz`
    - matching `.sha256` files
-   - each tarball includes `tuiman`, `install.sh`, and `INSTALL.md`
+   - each tarball includes `tuiman`, `install.sh`, and `README.md`
 
 ## What the workflow does
 
