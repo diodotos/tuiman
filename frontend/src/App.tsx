@@ -1343,9 +1343,25 @@ export function App() {
   const requestBodyRows = Math.max(1, topRows - 9);
   const responseBodyRows = Math.max(1, responseRows - 11);
 
-  const requestBodyVisibleLines = bodySliceLines(selectedItem?.body || "(empty)", requestBodyScroll, requestBodyRows, requestPreviewBodyTextWidth);
+  const requestBodySource = selectedItem?.body || "(empty)";
+  const requestBodyDisplay = isLikelyJson(requestBodySource)
+    ? (() => {
+        const pretty = maybePrettyJsonBody(requestBodySource);
+        return pretty.ok ? pretty.body : requestBodySource;
+      })()
+    : requestBodySource;
+
+  const responseBodySource = lastResponse?.body || "";
+  const responseBodyDisplay = isLikelyJson(responseBodySource)
+    ? (() => {
+        const pretty = maybePrettyJsonBody(responseBodySource);
+        return pretty.ok ? pretty.body : responseBodySource;
+      })()
+    : responseBodySource;
+
+  const requestBodyVisibleLines = bodySliceLines(requestBodyDisplay, requestBodyScroll, requestBodyRows, requestPreviewBodyTextWidth);
   const requestBodyVisible = requestBodyVisibleLines.join("\n");
-  const responseBodyVisibleLines = bodySliceLines(lastResponse?.body || "", responseBodyScroll, responseBodyRows, responseBodyTextWidth);
+  const responseBodyVisibleLines = bodySliceLines(responseBodyDisplay, responseBodyScroll, responseBodyRows, responseBodyTextWidth);
   const responseBodyVisible = responseBodyVisibleLines.join("\n");
   const historyDetailVisible = bodySlice(
     `${selectedRun?.request_snapshot || ""}\n\nresponse body:\n${selectedRun?.response_body || ""}`,
@@ -1413,7 +1429,7 @@ export function App() {
     const previewUrlParts = wrapLabelValue("url:", selectedItem?.url || "(none)", requestPreviewMetaTextWidth, 2);
     const previewStatusLine = fitTo(selectedItem ? "" : "No request selected.", requestPreviewMetaTextWidth);
     const previewUrlContinuation = `${" ".repeat(previewUrlParts.labelWidth)}${previewUrlParts.valueLines[1] || " ".repeat(previewUrlParts.valueWidth)}`;
-    const previewHasJsonBody = Boolean(selectedItem && isLikelyJson(selectedItem.body));
+    const previewHasJsonBody = Boolean(selectedItem && isLikelyJson(requestBodyDisplay));
 
     const responseRequestParts = wrapLabelValue(
       "request:",
@@ -1496,15 +1512,16 @@ export function App() {
                 <text fg={palette.section}>Body</text>
                 <box key={`preview-body-${selectedItem?.id ?? "none"}`} flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
                   {previewHasJsonBody ? (
-                    <box flexDirection="column">
+                    <text>
                       {requestBodyVisibleLines.map((line, idx) => (
-                        <text key={`preview-json-line-${idx}`}>
+                        <span key={`preview-json-line-${idx}`} fg={palette.hint}>
                           {jsonTokens(line).map((token, tokenIdx) => (
                             <span key={`preview-json-token-${idx}-${tokenIdx}`} fg={token.fg ?? palette.hint}>{token.text}</span>
                           ))}
-                        </text>
+                          {idx < requestBodyVisibleLines.length - 1 ? "\n" : ""}
+                        </span>
                       ))}
-                    </box>
+                    </text>
                   ) : (
                     <text fg={palette.hint}>{requestBodyVisible}</text>
                   )}
