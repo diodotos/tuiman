@@ -8,7 +8,7 @@
 - Import/export command path is wired.
 - External body editor path is wired for main action row and editor.
 - JSON validate + pretty-format on save is wired for JSON-like request bodies.
-- Reverse search trigger (`?`) and `n`/`N` navigation are wired.
+- Reverse search trigger (`?`) is wired.
 - Split-pane mouse drag behavior tightened with divider snap-start handling.
 - PTY parity checklist established.
 

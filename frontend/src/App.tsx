@@ -77,11 +77,9 @@ const EDITOR_FIELDS: EditorField[] = [
 
 const AUTH_FIELD_INDEX = 5;
 
-const MAIN_STATUS_HINT =
-  "j/k move | / ? search | n/N next/prev | : command | Enter actions | E edit | d delete | ZZ/ZQ quit | { } req body | [ ] resp body | drag";
-
-const HISTORY_STATUS_HINT = "j/k move | r replay | H/L resize | { } detail | mouse drag | Esc back";
-const EDITOR_STATUS_HINT = "j/k field | h/l method | i edit | : cmd | Ctrl+s save | Esc cancel | { } body";
+const MAIN_IDLE_HINT = ":help for keybinds and commands";
+const HISTORY_IDLE_HINT = ":help for history keybinds | Esc back";
+const EDITOR_IDLE_HINT = "Editor: :help for keybinds";
 
 const MAIN_MIN_LEFT_COLS = 20;
 const MAIN_MIN_RIGHT_COLS = 12;
@@ -118,13 +116,27 @@ function backspacePressed(key: { name?: string; sequence?: string }): boolean {
   return key.name === "backspace" || key.sequence === "\x7f";
 }
 
-function bodySlice(text: string, offset: number, maxLines: number): string {
-  const lines = text.split(/\r?\n/);
-  if (lines.length === 0) {
+function bodySlice(text: string, offset: number, maxLines: number, wrapWidth: number): string {
+  const effectiveWidth = Math.max(1, wrapWidth);
+  const rawLines = text.split(/\r?\n/);
+  const wrappedLines: string[] = [];
+
+  for (const rawLine of rawLines) {
+    if (rawLine.length === 0) {
+      wrappedLines.push("");
+      continue;
+    }
+    for (let i = 0; i < rawLine.length; i += effectiveWidth) {
+      wrappedLines.push(rawLine.slice(i, i + effectiveWidth));
+    }
+  }
+
+  if (wrappedLines.length === 0) {
     return "";
   }
-  const start = Math.max(0, Math.min(offset, lines.length - 1));
-  return lines.slice(start, start + maxLines).join("\n");
+
+  const start = Math.max(0, Math.min(offset, wrappedLines.length - 1));
+  return wrappedLines.slice(start, start + maxLines).join("\n");
 }
 
 function nowIsoNoMillis(): string {
@@ -205,7 +217,7 @@ function editorPrompt(mode: EditorMode, input: string, commandInput: string, cur
   if (mode === "COMMAND") {
     return `:${commandInput}`;
   }
-  return EDITOR_STATUS_HINT;
+  return EDITOR_IDLE_HINT;
 }
 
 function mainPrompt(mode: MainMode, commandInput: string, searchInput: string, searchPrefix: "/" | "?", deleteName: string): string {
@@ -221,7 +233,7 @@ function mainPrompt(mode: MainMode, commandInput: string, searchInput: string, s
   if (mode === "DELETE_CONFIRM") {
     return `Delete '${deleteName}'? y/n`;
   }
-  return MAIN_STATUS_HINT;
+  return MAIN_IDLE_HINT;
 }
 
 function requestFieldValue(req: RequestItem, key: EditorFieldKey): string {
@@ -261,7 +273,7 @@ export function App() {
   const [editorCommandInput, setEditorCommandInput] = useState("");
   const [editorBodyScroll, setEditorBodyScroll] = useState(0);
 
-  const [status, setStatus] = useState(MAIN_STATUS_HINT);
+  const [status, setStatus] = useState(MAIN_IDLE_HINT);
   const [statusIsError, setStatusIsError] = useState(false);
   const [pendingG, setPendingG] = useState(false);
   const [pendingZ, setPendingZ] = useState(false);
@@ -488,7 +500,7 @@ export function App() {
   async function executeMainCommand(raw: string): Promise<void> {
     const line = raw.trim();
     if (!line) {
-      setStatusInfo(MAIN_STATUS_HINT);
+      setStatusInfo(MAIN_IDLE_HINT);
       return;
     }
 
@@ -648,7 +660,7 @@ export function App() {
 
   function setMainHorizontalRatioFromY(y: number): void {
     const localRow = clamp(Math.round(y) - 1, 1, contentRows);
-    const bottom = clamp(contentRows - localRow, MAIN_MIN_BOTTOM_ROWS, Math.max(MAIN_MIN_BOTTOM_ROWS, contentRows - MAIN_MIN_TOP_ROWS - 1));
+    const bottom = clamp(contentRows - localRow, mainBottomMinRows, maxResponseRows);
     const ratio = bottom / Math.max(contentRows, 1);
     setMainResponseRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
   }
@@ -673,12 +685,10 @@ export function App() {
     setEditorSplitRatio((prev) => (Math.abs(prev - ratio) < 0.0001 ? prev : ratio));
   }
 
-  function applyDrag(modeValue: DragMode, event: MouseLikeEvent): void {
+  function applyDrag(modeValue: DragMode, x: number, y: number): void {
     if (termWidth <= 0 || termHeight <= 0) {
       return;
     }
-    const x = event.x ?? 0;
-    const y = event.y ?? 0;
 
     if (modeValue === "MAIN_VERTICAL") {
       setMainVerticalRatioFromX(x);
@@ -708,20 +718,23 @@ export function App() {
       setStatusInfo("Dragging editor divider...");
     }
     if (event && (event.x != null || event.y != null)) {
-      applyDrag(next, event);
+      const x = event.x ?? 0;
+      const y = event.y ?? 0;
+      applyDrag(next, x, y);
     }
   }
 
   function stopDrag(): void {
-    if (dragMode !== "NONE") {
-      if (dragMode === "MAIN_VERTICAL" || dragMode === "MAIN_HORIZONTAL") {
+    const modeValue = dragMode;
+    if (modeValue !== "NONE") {
+      setDragMode("NONE");
+      if (modeValue === "MAIN_VERTICAL" || modeValue === "MAIN_HORIZONTAL") {
         setStatusInfo(`Resize: left=${mainLeftCols} cols response=${responseRows} rows`);
-      } else if (dragMode === "HISTORY_VERTICAL") {
+      } else if (modeValue === "HISTORY_VERTICAL") {
         setStatusInfo(`History resize: left=${historyLeftCols} cols`);
-      } else if (dragMode === "EDITOR_VERTICAL") {
+      } else if (modeValue === "EDITOR_VERTICAL") {
         setStatusInfo(`Editor resize: left=${editorLeftCols} cols`);
       }
-      setDragMode("NONE");
     }
   }
 
@@ -729,14 +742,18 @@ export function App() {
     if (dragMode === "NONE") {
       return;
     }
-    applyDrag(dragMode, event);
+    const x = event.x ?? 0;
+    const y = event.y ?? 0;
+    applyDrag(dragMode, x, y);
   }
 
   function handleMouseMove(event: MouseLikeEvent): void {
     if (dragMode === "NONE") {
       return;
     }
-    applyDrag(dragMode, event);
+    const x = event.x ?? 0;
+    const y = event.y ?? 0;
+    applyDrag(dragMode, x, y);
   }
 
   useKeyboard((key) => {
@@ -745,7 +762,7 @@ export function App() {
     if (screen === "HELP") {
       if (key.name === "escape" || ch === "q") {
         setScreen("MAIN");
-        setStatusInfo(MAIN_STATUS_HINT);
+        setStatusInfo(MAIN_IDLE_HINT);
       }
       return;
     }
@@ -753,7 +770,7 @@ export function App() {
     if (screen === "HISTORY") {
       if (key.name === "escape") {
         setScreen("MAIN");
-        setStatusInfo(MAIN_STATUS_HINT);
+        setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
       if (key.name === "down" || ch === "j") {
@@ -939,7 +956,7 @@ export function App() {
         setFilter(searchSnapshot);
         setSearchInput(searchSnapshot);
         setMode("NORMAL");
-        setStatusInfo(MAIN_STATUS_HINT);
+        setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
       if (key.name === "enter" || key.name === "return") {
@@ -969,7 +986,7 @@ export function App() {
       if (key.name === "escape") {
         setMode("NORMAL");
         setCommandInput("");
-        setStatusInfo(MAIN_STATUS_HINT);
+        setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
       if (key.name === "enter" || key.name === "return") {
@@ -992,7 +1009,7 @@ export function App() {
     if (mode === "ACTION") {
       if (key.name === "escape" || ch === "n") {
         setMode("NORMAL");
-        setStatusInfo(MAIN_STATUS_HINT);
+        setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
       if (ch === "y") {
@@ -1052,7 +1069,7 @@ export function App() {
 
     if (key.name === "escape") {
       setFilter("");
-      setStatusInfo(MAIN_STATUS_HINT);
+      setStatusInfo(MAIN_IDLE_HINT);
       return;
     }
     if (key.name === "enter" || key.name === "return") {
@@ -1081,13 +1098,13 @@ export function App() {
       return;
     }
     if (ch === "K") {
-      const nextRows = clamp(responseRows - 1, MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
+      const nextRows = clamp(responseRows + 1, mainBottomMinRows, maxResponseRows);
       setMainResponseRatio(nextRows / Math.max(contentRows, 1));
       setStatusInfo(`Resize: left=${mainLeftCols} cols response=${nextRows} rows`);
       return;
     }
     if (ch === "J") {
-      const nextRows = clamp(responseRows + 1, MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
+      const nextRows = clamp(responseRows - 1, mainBottomMinRows, maxResponseRows);
       setMainResponseRatio(nextRows / Math.max(contentRows, 1));
       setStatusInfo(`Resize: left=${mainLeftCols} cols response=${nextRows} rows`);
       return;
@@ -1123,23 +1140,6 @@ export function App() {
       setSearchInput(filter);
       setSearchPrefix("?");
       setMode("SEARCH");
-      return;
-    }
-
-    if (ch === "n") {
-      if (visible.length === 0) {
-        setStatusError("No search matches.");
-      } else {
-        setSelected((prev) => (prev + 1) % visible.length);
-      }
-      return;
-    }
-    if (ch === "N") {
-      if (visible.length === 0) {
-        setStatusError("No search matches.");
-      } else {
-        setSelected((prev) => (prev - 1 + visible.length) % visible.length);
-      }
       return;
     }
 
@@ -1181,23 +1181,16 @@ export function App() {
     }
   });
 
-  const requestBodyVisible = bodySlice(selectedItem?.body || "(empty)", requestBodyScroll, 220);
-  const responseBodyVisible = bodySlice(lastResponse?.body || "", responseBodyScroll, 220);
-  const historyDetailVisible = bodySlice(
-    `${selectedRun?.request_snapshot || ""}\n\nresponse body:\n${selectedRun?.response_body || ""}`,
-    historyDetailScroll,
-    220,
-  );
-  const editorBodyVisible = bodySlice(editorDraft?.body || "(empty)", editorBodyScroll, 220);
-
   const showMainRight = termWidth >= 90;
   const showHistoryRight = termWidth >= 84;
   const showEditorRight = termWidth >= 90;
 
-  const contentRows = Math.max(10, termHeight - 3);
-  const maxResponseRows = Math.max(MAIN_MIN_BOTTOM_ROWS, contentRows - MAIN_MIN_TOP_ROWS - 1);
-  const responseRows = clamp(Math.round(mainResponseRatio * contentRows), MAIN_MIN_BOTTOM_ROWS, maxResponseRows);
-  const topRows = Math.max(MAIN_MIN_TOP_ROWS, contentRows - responseRows - 1);
+  const contentRows = Math.max(3, termHeight - 3);
+  const mainTopMinRows = Math.min(MAIN_MIN_TOP_ROWS, Math.max(1, contentRows - MAIN_MIN_BOTTOM_ROWS - 1));
+  const mainBottomMinRows = Math.min(MAIN_MIN_BOTTOM_ROWS, Math.max(1, contentRows - mainTopMinRows - 1));
+  const maxResponseRows = Math.max(mainBottomMinRows, contentRows - mainTopMinRows - 1);
+  const responseRows = clamp(Math.round(mainResponseRatio * contentRows), mainBottomMinRows, maxResponseRows);
+  const topRows = Math.max(1, contentRows - responseRows - 1);
 
   const mainMaxLeftCols = Math.max(MAIN_MIN_LEFT_COLS, termWidth - MAIN_MIN_RIGHT_COLS - 1);
   const mainLeftCols = clamp(Math.round(mainSplitRatio * termWidth), MAIN_MIN_LEFT_COLS, mainMaxLeftCols);
@@ -1210,6 +1203,31 @@ export function App() {
   const editorMaxLeftCols = Math.max(EDITOR_MIN_LEFT_COLS, termWidth - EDITOR_MIN_RIGHT_COLS - 1);
   const editorLeftCols = clamp(Math.round(editorSplitRatio * termWidth), EDITOR_MIN_LEFT_COLS, editorMaxLeftCols);
   const editorRightCols = Math.max(EDITOR_MIN_RIGHT_COLS, termWidth - editorLeftCols - 1);
+
+  const requestListTextWidth = Math.max(12, (showMainRight ? mainLeftCols : termWidth) - 4);
+  const requestPreviewTextWidth = Math.max(12, mainRightCols - 5);
+  const responsePaneTextWidth = Math.max(18, termWidth - 6);
+  const responseBodyTextWidth = Math.max(18, termWidth - 8);
+  const historyDetailTextWidth = Math.max(12, historyRightCols - 6);
+  const editorMetaTextWidth = Math.max(12, editorRightCols - 4);
+  const editorBodyTextWidth = Math.max(12, editorRightCols - 6);
+
+  const requestBodyVisible = bodySlice(selectedItem?.body || "(empty)", requestBodyScroll, 220, requestPreviewTextWidth);
+  const responseBodyVisible = bodySlice(lastResponse?.body || "", responseBodyScroll, 220, responseBodyTextWidth);
+  const historyDetailVisible = bodySlice(
+    `${selectedRun?.request_snapshot || ""}\n\nresponse body:\n${selectedRun?.response_body || ""}`,
+    historyDetailScroll,
+    220,
+    historyDetailTextWidth,
+  );
+  const editorBodyVisible = bodySlice(editorDraft?.body || "(empty)", editorBodyScroll, 220, editorBodyTextWidth);
+
+  const dividerIdleColor = palette.divider;
+  const dividerActiveColor = palette.section;
+  const mainVerticalDividerColor = dragMode === "MAIN_VERTICAL" ? dividerActiveColor : dividerIdleColor;
+  const mainHorizontalDividerColor = dragMode === "MAIN_HORIZONTAL" ? dividerActiveColor : dividerIdleColor;
+  const historyVerticalDividerColor = dragMode === "HISTORY_VERTICAL" ? dividerActiveColor : dividerIdleColor;
+  const editorVerticalDividerColor = dragMode === "EDITOR_VERTICAL" ? dividerActiveColor : dividerIdleColor;
 
   function handleRootMouseDown(event: MouseLikeEvent): void {
     if (dragMode !== "NONE") {
@@ -1252,11 +1270,11 @@ export function App() {
 
   function renderMainScreen() {
     return (
-      <box flexGrow={1} flexDirection="column">
-        <box height={topRows} flexDirection="row" border borderColor={palette.border}>
+      <box flexGrow={1} flexDirection="column" border borderColor={palette.border}>
+        <box height={topRows} flexDirection="row">
           <box width={showMainRight ? mainLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
             <text fg={palette.section}>Requests</text>
-            <text fg={palette.hint}>{trimTo(`Filter: ${filter || "(none)"}`, 64)}</text>
+            <text fg={palette.hint}>{trimTo(`Filter: ${filter || "(none)"}`, requestListTextWidth)}</text>
             <scrollbox flexGrow={1} marginTop={1}>
               {visible.map((req, idx) => {
                 const active = idx === selected;
@@ -1275,30 +1293,20 @@ export function App() {
           {showMainRight ? (
             <box
               width={1}
-              backgroundColor={palette.border}
+              border={["left"]}
+              borderColor={mainVerticalDividerColor}
               onMouseDown={(event) => beginDrag("MAIN_VERTICAL", event)}
-            >
-              <text fg={palette.bg}>|</text>
-            </box>
+            />
           ) : null}
 
           {showMainRight ? (
-            <box width={mainRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+            <box width={mainRightCols} paddingX={1} paddingTop={1}>
               <text fg={palette.section}>Request Preview</text>
               {selectedItem ? (
                 <box marginTop={1} flexDirection="column" gap={0}>
-                  <text>
-                    <span fg={palette.section}>name: </span>
-                    <span fg={palette.hint}>{selectedItem.name}</span>
-                  </text>
-                  <text>
-                    <span fg={palette.section}>method: </span>
-                    <span fg={methodColor(selectedItem.method)}>{selectedItem.method}</span>
-                  </text>
-                  <text>
-                    <span fg={palette.section}>url: </span>
-                    <span fg={palette.hint}>{selectedItem.url}</span>
-                  </text>
+                  <text fg={palette.hint}>{trimTo(`name: ${selectedItem.name}`, requestPreviewTextWidth)}</text>
+                  <text fg={methodColor(selectedItem.method)}>{trimTo(`method: ${selectedItem.method}`, requestPreviewTextWidth)}</text>
+                  <text fg={palette.hint}>{trimTo(`url: ${selectedItem.url}`, requestPreviewTextWidth)}</text>
                   <text fg={palette.section}>Body</text>
                   <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
                     <text fg={palette.hint}>{requestBodyVisible}</text>
@@ -1313,40 +1321,24 @@ export function App() {
 
         <box
           height={1}
-          backgroundColor={palette.border}
+          border={["top"]}
+          borderColor={mainHorizontalDividerColor}
           onMouseDown={(event) => beginDrag("MAIN_HORIZONTAL", event)}
-        >
-          <text fg={palette.bg}>-</text>
-        </box>
+        />
 
-        <box height={responseRows} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+        <box height={responseRows} paddingX={1} paddingTop={1}>
           <text fg={palette.section}>Response</text>
           {lastResponse ? (
             <box flexDirection="column">
-              <text>
-                <span fg={palette.section}>request: </span>
-                <span fg={palette.hint}>{lastResponse.requestName}</span>
-                <span fg={palette.hint}> ({lastResponse.requestId})</span>
-              </text>
-              <text>
-                <span fg={palette.section}>method/url: </span>
-                <span fg={methodColor(lastResponse.method)}>{lastResponse.method}</span>
-                <span fg={palette.hint}> {lastResponse.url}</span>
-              </text>
-              <text>
-                <span fg={palette.section}>at/status/ms: </span>
-                <span fg={palette.hint}>
-                  {lastResponse.at} / {lastResponse.statusCode} / {lastResponse.durationMs}
-                </span>
-              </text>
+              <text fg={palette.hint}>{trimTo(`request: ${lastResponse.requestName} (${lastResponse.requestId})`, responsePaneTextWidth)}</text>
+              <text fg={methodColor(lastResponse.method)}>{trimTo(`method: ${lastResponse.method}`, responsePaneTextWidth)}</text>
+              <text fg={palette.hint}>{trimTo(`url: ${lastResponse.url}`, responsePaneTextWidth)}</text>
+              <text fg={palette.hint}>{trimTo(`at/status/ms: ${lastResponse.at} / ${lastResponse.statusCode} / ${lastResponse.durationMs}`, responsePaneTextWidth)}</text>
               {lastResponse.error ? (
-                <text>
-                  <span fg={palette.section}>error: </span>
-                  <span fg={palette.error}>{lastResponse.error}</span>
-                </text>
+                <text fg={palette.error}>{trimTo(`error: ${lastResponse.error}`, responsePaneTextWidth)}</text>
               ) : null}
               <text fg={palette.section}>Body</text>
-              <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
+              <scrollbox flexGrow={1} marginBottom={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
                 <text fg={palette.hint}>{responseBodyVisible || "(empty)"}</text>
               </scrollbox>
             </box>
@@ -1380,35 +1372,19 @@ export function App() {
           </scrollbox>
         </box>
 
-        {showHistoryRight ? (
-          <box width={1} backgroundColor={palette.border} onMouseDown={(event) => beginDrag("HISTORY_VERTICAL", event)}>
-            <text fg={palette.bg}>|</text>
-          </box>
-        ) : null}
+        {showHistoryRight ? <box width={1} border={["left"]} borderColor={historyVerticalDividerColor} onMouseDown={(event) => beginDrag("HISTORY_VERTICAL", event)} /> : null}
 
         {showHistoryRight ? (
-          <box width={historyRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+          <box width={historyRightCols} paddingX={1} paddingTop={1}>
             <text fg={palette.section}>Run Detail</text>
             {selectedRun ? (
               <box flexDirection="column">
-                <text>
-                  <span fg={palette.section}>id/at: </span>
-                  <span fg={palette.hint}>#{selectedRun.id} {selectedRun.created_at}</span>
-                </text>
-                <text>
-                  <span fg={palette.section}>method/url: </span>
-                  <span fg={methodColor(selectedRun.method)}>{selectedRun.method}</span>
-                  <span fg={palette.hint}> {selectedRun.url}</span>
-                </text>
-                <text>
-                  <span fg={palette.section}>status/ms: </span>
-                  <span fg={palette.hint}>{selectedRun.status_code} / {selectedRun.duration_ms}</span>
-                </text>
+                <text fg={palette.hint}>{trimTo(`id/at: #${selectedRun.id} ${selectedRun.created_at}`, historyDetailTextWidth)}</text>
+                <text fg={methodColor(selectedRun.method)}>{trimTo(`method: ${selectedRun.method}`, historyDetailTextWidth)}</text>
+                <text fg={palette.hint}>{trimTo(`url: ${selectedRun.url}`, historyDetailTextWidth)}</text>
+                <text fg={palette.hint}>{trimTo(`status/ms: ${selectedRun.status_code} / ${selectedRun.duration_ms}`, historyDetailTextWidth)}</text>
                 {selectedRun.error ? (
-                  <text>
-                    <span fg={palette.section}>error: </span>
-                    <span fg={palette.error}>{selectedRun.error}</span>
-                  </text>
+                  <text fg={palette.error}>{trimTo(`error: ${selectedRun.error}`, historyDetailTextWidth)}</text>
                 ) : null}
                 <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
                   <text fg={palette.hint}>{historyDetailVisible || "(empty)"}</text>
@@ -1450,34 +1426,21 @@ export function App() {
           )}
         </box>
 
-        {showEditorRight ? (
-          <box width={1} backgroundColor={palette.border} onMouseDown={(event) => beginDrag("EDITOR_VERTICAL", event)}>
-            <text fg={palette.bg}>|</text>
-          </box>
-        ) : null}
+        {showEditorRight ? <box width={1} border={["left"]} borderColor={editorVerticalDividerColor} onMouseDown={(event) => beginDrag("EDITOR_VERTICAL", event)} /> : null}
 
         {showEditorRight && draft ? (
-          <box width={editorRightCols} border borderColor={palette.border} paddingX={1} paddingTop={1}>
+          <box width={editorRightCols} paddingX={1} paddingTop={1}>
             <text fg={palette.section}>Preview</text>
             <box marginTop={1} flexDirection="column">
-              <text>
-                <span fg={palette.section}>name: </span>
-                <span fg={palette.hint}>{draft.name}</span>
-              </text>
-              <text>
-                <span fg={palette.section}>method: </span>
-                <span fg={methodColor(draft.method)}>{draft.method}</span>
-              </text>
-              <text>
-                <span fg={palette.section}>url: </span>
-                <span fg={palette.hint}>{draft.url}</span>
-              </text>
+              <text fg={palette.hint}>{trimTo(`name: ${draft.name || "(empty)"}`, editorMetaTextWidth)}</text>
+              <text fg={methodColor(draft.method)}>{trimTo(`method: ${draft.method}`, editorMetaTextWidth)}</text>
+              <text fg={palette.hint}>{trimTo(`url: ${draft.url || "(empty)"}`, editorMetaTextWidth)}</text>
               <text fg={palette.section}>Body</text>
               <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
                 <text fg={palette.hint}>{editorBodyVisible}</text>
               </scrollbox>
             </box>
-            <text fg={palette.hint}>Field: {currentField.label}</text>
+            <text fg={palette.hint}>{trimTo(`Field: ${currentField.label}`, editorMetaTextWidth)}</text>
           </box>
         ) : null}
       </box>
@@ -1490,7 +1453,7 @@ export function App() {
         <text fg={palette.section}>Help</text>
         <scrollbox flexGrow={1} marginTop={1}>
           <text fg={palette.hint}>Main:</text>
-          <text fg={palette.hint}>  j/k, gg/G, Enter, /, ?, n/N, :, d, E, ZZ/ZQ, H/L, K/J, {'{'} {'}'}, [ ]</text>
+          <text fg={palette.hint}>  j/k, gg/G, Enter, /, ?, :, d, E, ZZ/ZQ, H/L, K/J, {'{'} {'}'}, [ ]</text>
           <text fg={palette.hint}>Action: y send, e body edit, a auth editor, Esc/n cancel</text>
           <text fg={palette.hint}>History: j/k, r replay, H/L, {'{'} {'}'}, Esc</text>
           <text fg={palette.hint}>Editor: j/k, h/l method, i/Enter edit, :w/:q/:wq, Ctrl+s, Esc</text>
@@ -1500,22 +1463,35 @@ export function App() {
     );
   }
 
-  let prompt = MAIN_STATUS_HINT;
-  let modeLabel = `[${screen}]`;
+  let prompt = MAIN_IDLE_HINT;
+  let idleHint = MAIN_IDLE_HINT;
 
   if (screen === "MAIN") {
-    modeLabel = `[MAIN ${mode}]`;
     prompt = mainPrompt(mode, commandInput, searchInput, searchPrefix, selectedItem?.name ?? "");
+    idleHint = MAIN_IDLE_HINT;
   } else if (screen === "HISTORY") {
-    modeLabel = "[HISTORY]";
-    prompt = HISTORY_STATUS_HINT;
+    prompt = HISTORY_IDLE_HINT;
+    idleHint = HISTORY_IDLE_HINT;
   } else if (screen === "EDITOR") {
-    modeLabel = `[EDITOR ${editorMode}]`;
     const currentLabel = EDITOR_FIELDS[editorField]?.label ?? "Field";
     prompt = editorPrompt(editorMode, editorInput, editorCommandInput, currentLabel);
+    idleHint = EDITOR_IDLE_HINT;
   } else if (screen === "HELP") {
-    modeLabel = "[HELP]";
     prompt = "Esc to return to main";
+    idleHint = "Esc to return to main";
+  }
+
+  const showPrompt =
+    (screen === "MAIN" && mode !== "NORMAL") ||
+    (screen === "EDITOR" && editorMode !== "NORMAL");
+
+  let bottomBarText = idleHint;
+  if (showPrompt) {
+    bottomBarText = screen === "EDITOR" ? `[EDITOR ${editorMode}] ${prompt}` : prompt;
+  } else if (status && status !== MAIN_IDLE_HINT && status !== HISTORY_IDLE_HINT && status !== EDITOR_IDLE_HINT) {
+    bottomBarText = screen === "EDITOR" ? `[EDITOR] ${status}` : status;
+  } else if (screen === "EDITOR") {
+    bottomBarText = `[EDITOR] ${idleHint}`;
   }
 
   return (
@@ -1534,7 +1510,6 @@ export function App() {
       <box height={1} paddingX={1} backgroundColor={palette.panelSoft}>
         <text fg={palette.section}>
           <strong>tuiman</strong>
-          <span fg={palette.hint}>  rewrite/typescript-opentui</span>
         </text>
       </box>
 
@@ -1544,12 +1519,7 @@ export function App() {
       {screen === "HELP" ? renderHelpScreen() : null}
 
       <box height={1} paddingX={1} backgroundColor={palette.panelSoft}>
-        <text fg={statusIsError ? palette.error : palette.hint}>
-          {modeLabel} {trimTo(prompt, 220)}
-        </text>
-      </box>
-      <box height={1} paddingX={1} backgroundColor={palette.bg}>
-        <text fg={statusIsError ? palette.error : palette.hint}>{trimTo(status, 220)}</text>
+        <text fg={statusIsError ? palette.error : palette.hint}>{trimTo(bottomBarText, Math.max(1, termWidth - 2))}</text>
       </box>
     </box>
   );

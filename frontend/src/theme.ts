@@ -3,6 +3,7 @@ export const palette = {
   panel: "#161b22",
   panelSoft: "#1f2731",
   border: "#405266",
+  divider: "#7c6ea8",
   section: "#7db2d3",
   hint: "#9db3c2",
   ok: "#76d6a8",

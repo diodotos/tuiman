@@ -7,7 +7,6 @@ This document tracks rewrite keybinding status.
 - `j` / `k` and arrow keys: move request selection.
 - `gg` / `G`: jump to top/bottom.
 - `/` and `?`: search mode with filter-as-you-type and `Enter` to lock.
-- `n` / `N`: move to next/previous match in current filtered list.
 - `:`: command mode.
 - `Enter`: action row mode.
 - `d`: delete confirmation mode (`y` confirm, `n`/`Esc` cancel).
@@ -76,7 +75,6 @@ Search/command:
 
 - `/`: forward filter input.
 - `?`: reverse/fuzzy search mode.
-- `n` / `N`: next/previous match.
 - `:`: command mode.
 
 ### Action row
