@@ -49,10 +49,13 @@ Editor screen currently wired:
 History screen currently wired:
 
 - `j` / `k`: move through runs.
+- `/`: history filter mode (live filter while typing; `Enter` lock, `Esc` cancel/restore).
 - `r`: replay selected run.
 - `H` / `L`: resize split.
+- `K` / `J`: resize request/response subwindow ratio in right detail pane.
 - Mouse drag on divider resizes list/detail split.
-- `{` / `}`: scroll detail body.
+- `{` / `}`: scroll request body in right detail pane.
+- `[` / `]`: scroll response body in right detail pane.
 - `Esc`: return to main.
 
 ## Target parity keybindings (must match C line)
@@ -98,7 +101,10 @@ Search/command:
 ### History screen
 
 - `j` / `k`: move runs.
+- `/`: filter runs.
 - `r`: replay selected run.
 - `H` / `L`: resize split.
-- `{` / `}`: scroll details.
+- `K` / `J`: resize request/response split in detail pane.
+- `{` / `}`: scroll request body.
+- `[` / `]`: scroll response body.
 - `Esc`: return to main.

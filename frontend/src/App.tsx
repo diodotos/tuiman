@@ -1,6 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { useEffect, useMemo, useState } from "react";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 
@@ -21,6 +22,7 @@ import { newRequest, type RequestItem, type RunEntry } from "./types";
 
 type Screen = "MAIN" | "HISTORY" | "EDITOR" | "HELP";
 type MainMode = "NORMAL" | "SEARCH" | "COMMAND" | "ACTION" | "DELETE_CONFIRM";
+type HistoryMode = "NORMAL" | "SEARCH";
 type EditorMode = "NORMAL" | "INSERT" | "COMMAND";
 type DragMode = "NONE" | "MAIN_VERTICAL" | "MAIN_HORIZONTAL" | "HISTORY_VERTICAL" | "EDITOR_VERTICAL";
 
@@ -78,7 +80,7 @@ const EDITOR_FIELDS: EditorField[] = [
 const AUTH_FIELD_INDEX = 5;
 
 const MAIN_IDLE_HINT = ":help for keybinds and commands";
-const HISTORY_IDLE_HINT = ":help for history keybinds | Esc back";
+const HISTORY_IDLE_HINT = "History: / filter | r replay | K/J split | { } req body | [ ] resp body | Esc back";
 const EDITOR_IDLE_HINT = "Editor: :help for keybinds";
 
 const MAIN_MIN_LEFT_COLS = 20;
@@ -165,6 +167,11 @@ function responseStatusColor(statusCode?: number): string {
 
 type JsonToken = { text: string; fg?: string };
 
+type ParsedRequestSnapshot = {
+  fields: Record<string, string>;
+  body: string;
+};
+
 function jsonTokens(line: string): JsonToken[] {
   const tokens: JsonToken[] = [];
   const re = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\btrue\b|\bfalse\b|\bnull\b|[{}\[\],:]/g;
@@ -205,23 +212,120 @@ function jsonTokens(line: string): JsonToken[] {
   return tokens;
 }
 
-function printableChar(key: { sequence?: string; ctrl?: boolean; meta?: boolean; option?: boolean }): string | null {
+function isTransportFailure(run: RunEntry): boolean {
+  return run.status_code <= 0 || run.error.trim().length > 0 && run.status_code <= 0;
+}
+
+function historyStatusLabel(run: RunEntry): string {
+  return isTransportFailure(run) ? "ERR" : `[${run.status_code}]`;
+}
+
+function historyStatusColor(run: RunEntry): string {
+  if (isTransportFailure(run)) {
+    return palette.error;
+  }
+  return responseStatusColor(run.status_code);
+}
+
+function parseRequestSnapshot(snapshot: string): ParsedRequestSnapshot {
+  const raw = snapshot || "";
+  const splitToken = "\nbody:\n";
+  const splitIndex = raw.indexOf(splitToken);
+  const metaPart = splitIndex >= 0 ? raw.slice(0, splitIndex) : raw;
+  const bodyPart = splitIndex >= 0 ? raw.slice(splitIndex + splitToken.length) : "";
+  const fields: Record<string, string> = {};
+
+  for (const line of metaPart.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const idx = trimmed.indexOf(":");
+    if (idx < 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    fields[key] = value;
+  }
+
+  return {
+    fields,
+    body: bodyPart || "(empty)",
+  };
+}
+
+function normalizeBottomBarInput(text: string): string {
+  const withoutBracketedPasteMarkers = text.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+  const singleLine = withoutBracketedPasteMarkers.replace(/\r\n?/g, "\n").replace(/\n/g, " ");
+  let out = "";
+
+  for (const ch of singleLine) {
+    const code = ch.charCodeAt(0);
+    if (code < 32 || code === 127) {
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function bottomBarInputChunk(key: { sequence?: string; ctrl?: boolean; meta?: boolean; option?: boolean }): string | null {
   if (key.ctrl || key.meta || key.option) {
     return null;
   }
-  const seq = key.sequence ?? "";
-  if (seq.length !== 1) {
+  const normalized = normalizeBottomBarInput(key.sequence ?? "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readSystemClipboardText(): { ok: true; text: string } | { ok: false; error: string } {
+  if (process.platform !== "darwin") {
+    return { ok: false, error: "System clipboard shortcuts currently supported on macOS only." };
+  }
+  const proc = spawnSync("pbpaste", [], { encoding: "utf8" });
+  if (proc.error) {
+    return { ok: false, error: proc.error.message };
+  }
+  if (proc.status !== 0) {
+    return { ok: false, error: (proc.stderr || "pbpaste failed").trim() || "pbpaste failed" };
+  }
+  return { ok: true, text: proc.stdout || "" };
+}
+
+function writeSystemClipboardText(text: string): { ok: true } | { ok: false; error: string } {
+  if (process.platform !== "darwin") {
+    return { ok: false, error: "System clipboard shortcuts currently supported on macOS only." };
+  }
+  const proc = spawnSync("pbcopy", [], { input: text, encoding: "utf8" });
+  if (proc.error) {
+    return { ok: false, error: proc.error.message };
+  }
+  if (proc.status !== 0) {
+    return { ok: false, error: (proc.stderr || "pbcopy failed").trim() || "pbcopy failed" };
+  }
+  return { ok: true };
+}
+
+function printableChar(key: { sequence?: string; ctrl?: boolean; meta?: boolean; option?: boolean }): string | null {
+  const chunk = bottomBarInputChunk(key);
+  if (!chunk || chunk.length !== 1) {
     return null;
   }
-  const code = seq.charCodeAt(0);
-  if (code < 32 || code === 127) {
-    return null;
-  }
-  return seq;
+  return chunk;
 }
 
 function backspacePressed(key: { name?: string; sequence?: string }): boolean {
   return key.name === "backspace" || key.sequence === "\x7f";
+}
+
+function clearInputPressed(key: { name?: string; sequence?: string; ctrl?: boolean }): boolean {
+  if (!key.ctrl) {
+    return false;
+  }
+  if (key.name === "backspace" || key.name === "delete") {
+    return true;
+  }
+  return key.sequence === "\x08" || key.sequence === "\x7f" || key.sequence === "\x1b[3;5~";
 }
 
 function bodySliceLines(text: string, offset: number, maxLines: number, wrapWidth: number): string[] {
@@ -254,6 +358,35 @@ function bodySliceLines(text: string, offset: number, maxLines: number, wrapWidt
 
 function bodySlice(text: string, offset: number, maxLines: number, wrapWidth: number): string {
   return bodySliceLines(text, offset, maxLines, wrapWidth).join("\n");
+}
+
+type BodyPaneProps = {
+  keyPrefix: string;
+  lines: string[];
+  visibleText: string;
+  hasJson: boolean;
+  emptyText?: string;
+};
+
+function BodyPane({ keyPrefix, lines, visibleText, hasJson, emptyText }: BodyPaneProps) {
+  return (
+    <box flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
+      {hasJson ? (
+        <text>
+          {lines.map((line, idx) => (
+            <span key={`${keyPrefix}-line-${idx}`} fg={palette.hint}>
+              {jsonTokens(line).map((token, tokenIdx) => (
+                <span key={`${keyPrefix}-token-${idx}-${tokenIdx}`} fg={token.fg ?? palette.hint}>{token.text}</span>
+              ))}
+              {idx < lines.length - 1 ? "\n" : ""}
+            </span>
+          ))}
+        </text>
+      ) : (
+        <text fg={palette.hint}>{visibleText || emptyText || "(empty)"}</text>
+      )}
+    </box>
+  );
 }
 
 function nowIsoNoMillis(): string {
@@ -382,7 +515,13 @@ export function App() {
 
   const [historyRuns, setHistoryRuns] = useState<RunEntry[]>([]);
   const [historySelected, setHistorySelected] = useState(0);
-  const [historyDetailScroll, setHistoryDetailScroll] = useState(0);
+  const [historyMode, setHistoryMode] = useState<HistoryMode>("NORMAL");
+  const [historyFilter, setHistoryFilter] = useState("");
+  const [historySearchInput, setHistorySearchInput] = useState("");
+  const [historySearchSnapshot, setHistorySearchSnapshot] = useState("");
+  const [historyRequestBodyScroll, setHistoryRequestBodyScroll] = useState(0);
+  const [historyResponseBodyScroll, setHistoryResponseBodyScroll] = useState(0);
+  const [historyDetailRatio, setHistoryDetailRatio] = useState(0.52);
 
   const [editorDraft, setEditorDraft] = useState<RequestItem | null>(null);
   const [editorField, setEditorField] = useState(0);
@@ -413,6 +552,29 @@ export function App() {
   function setStatusError(message: string): void {
     setStatus(message);
     setStatusIsError(true);
+  }
+
+  function appendClipboardText(append: (chunk: string) => void): void {
+    const clip = readSystemClipboardText();
+    if (!clip.ok) {
+      setStatusError(`Paste failed: ${clip.error}`);
+      return;
+    }
+    const chunk = normalizeBottomBarInput(clip.text);
+    if (!chunk) {
+      setStatusError("Paste failed: clipboard is empty or non-printable.");
+      return;
+    }
+    append(chunk);
+  }
+
+  function copyInputToClipboard(text: string): void {
+    const result = writeSystemClipboardText(text);
+    if (!result.ok) {
+      setStatusError(`Copy failed: ${result.error}`);
+      return;
+    }
+    setStatusInfo("Copied bottom input to system clipboard.");
   }
 
   async function reloadRequests(selectId?: string): Promise<void> {
@@ -469,8 +631,21 @@ export function App() {
     return requests.filter((r) => `${r.name} ${r.method} ${r.url}`.toLowerCase().includes(needle));
   }, [requests, filter]);
 
+  const historyVisible = useMemo(() => {
+    const needle = historyFilter.trim().toLowerCase();
+    if (!needle) {
+      return historyRuns;
+    }
+    return historyRuns.filter((run) => {
+      const statusLabel = historyStatusLabel(run).toLowerCase();
+      return `${run.request_name} ${run.request_id} ${run.method} ${run.url} ${statusLabel} ${run.error}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [historyRuns, historyFilter]);
+
   const selectedItem = visible[selected] ?? null;
-  const selectedRun = historyRuns[historySelected] ?? null;
+  const selectedRun = historyVisible[historySelected] ?? null;
 
   useEffect(() => {
     setSelected((prev) => {
@@ -482,13 +657,23 @@ export function App() {
   }, [visible]);
 
   useEffect(() => {
+    setHistorySelected((prev) => {
+      if (historyVisible.length === 0) {
+        return 0;
+      }
+      return clamp(prev, 0, historyVisible.length - 1);
+    });
+  }, [historyVisible]);
+
+  useEffect(() => {
     setRequestBodyScroll(0);
     setPendingG(false);
     setPendingZ(false);
   }, [selectedItem?.id]);
 
   useEffect(() => {
-    setHistoryDetailScroll(0);
+    setHistoryRequestBodyScroll(0);
+    setHistoryResponseBodyScroll(0);
   }, [selectedRun?.id]);
 
   function openEditor(request: RequestItem, initialField: number): void {
@@ -736,7 +921,42 @@ export function App() {
         setStatusInfo(`Sent ${req.method} ${req.url} (${sent.status_code}, ${sent.duration_ms}ms)`);
       }
     } catch (err) {
-      setStatusError(`Failed to send request: ${err instanceof Error ? err.message : String(err)}`);
+      const at = nowIsoNoMillis();
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      const preview: ResponsePreview = {
+        requestName: req.name,
+        requestId: req.id,
+        method: req.method,
+        url: req.url,
+        statusCode: 0,
+        durationMs: 0,
+        error: errorMessage,
+        at,
+        body: "",
+      };
+      setLastResponse(preview);
+      setResponseBodyScroll(0);
+
+      const run: RunEntry = {
+        id: 0,
+        request_id: req.id,
+        request_name: req.name,
+        method: req.method,
+        url: req.url,
+        status_code: 0,
+        duration_ms: 0,
+        error: errorMessage,
+        created_at: at,
+        request_snapshot: buildRequestSnapshot(req),
+        response_body: "",
+      };
+      await recordRun(run);
+      if (screen === "HISTORY") {
+        await reloadHistory();
+      }
+
+      setStatusError(`Failed to send request: ${errorMessage}`);
     }
   }
 
@@ -875,6 +1095,7 @@ export function App() {
 
   useKeyboard((key) => {
     const ch = printableChar(key);
+    const inputChunk = bottomBarInputChunk(key);
 
     if (screen === "HELP") {
       if (key.name === "escape" || ch === "q") {
@@ -885,17 +1106,74 @@ export function App() {
     }
 
     if (screen === "HISTORY") {
+      if (historyMode === "SEARCH") {
+        if (key.name === "escape") {
+          setHistoryFilter(historySearchSnapshot);
+          setHistorySearchInput(historySearchSnapshot);
+          setHistoryMode("NORMAL");
+          setStatusInfo(HISTORY_IDLE_HINT);
+          return;
+        }
+        if (key.ctrl && key.name === "v") {
+          appendClipboardText((chunk) => {
+            setHistorySearchInput((prev) => {
+              const next = `${prev}${chunk}`;
+              setHistoryFilter(next);
+              return next;
+            });
+          });
+          return;
+        }
+        if (key.ctrl && key.name === "y") {
+          copyInputToClipboard(historySearchInput);
+          return;
+        }
+        if (clearInputPressed(key)) {
+          setHistorySearchInput("");
+          setHistoryFilter("");
+          return;
+        }
+        if (key.name === "enter" || key.name === "return") {
+          setHistoryMode("NORMAL");
+          setStatusInfo(`History filter locked: ${historyFilter || "(none)"}`);
+          return;
+        }
+        if (backspacePressed(key)) {
+          setHistorySearchInput((prev) => {
+            const next = prev.slice(0, -1);
+            setHistoryFilter(next);
+            return next;
+          });
+          return;
+        }
+        if (inputChunk) {
+          setHistorySearchInput((prev) => {
+            const next = `${prev}${inputChunk}`;
+            setHistoryFilter(next);
+            return next;
+          });
+          return;
+        }
+        return;
+      }
+
       if (key.name === "escape") {
         setScreen("MAIN");
         setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
+      if (ch === "/") {
+        setHistorySearchSnapshot(historyFilter);
+        setHistorySearchInput(historyFilter);
+        setHistoryMode("SEARCH");
+        return;
+      }
       if (key.name === "down" || ch === "j") {
-        setHistorySelected((prev) => clamp(prev + 1, 0, Math.max(0, historyRuns.length - 1)));
+        setHistorySelected((prev) => clamp(prev + 1, 0, Math.max(0, historyVisible.length - 1)));
         return;
       }
       if (key.name === "up" || ch === "k") {
-        setHistorySelected((prev) => clamp(prev - 1, 0, Math.max(0, historyRuns.length - 1)));
+        setHistorySelected((prev) => clamp(prev - 1, 0, Math.max(0, historyVisible.length - 1)));
         return;
       }
       if (ch === "r") {
@@ -914,12 +1192,30 @@ export function App() {
         setStatusInfo(`History resize: left=${nextLeft} cols`);
         return;
       }
+      if (ch === "K") {
+        setHistoryDetailRatio((prev) => clamp(prev - 0.04, 0.32, 0.75));
+        setStatusInfo("History detail resize: request pane grows");
+        return;
+      }
+      if (ch === "J") {
+        setHistoryDetailRatio((prev) => clamp(prev + 0.04, 0.32, 0.75));
+        setStatusInfo("History detail resize: response pane grows");
+        return;
+      }
       if (ch === "{") {
-        setHistoryDetailScroll((prev) => Math.max(0, prev - 1));
+        setHistoryRequestBodyScroll((prev) => Math.max(0, prev - 1));
         return;
       }
       if (ch === "}") {
-        setHistoryDetailScroll((prev) => prev + 1);
+        setHistoryRequestBodyScroll((prev) => prev + 1);
+        return;
+      }
+      if (ch === "[") {
+        setHistoryResponseBodyScroll((prev) => Math.max(0, prev - 1));
+        return;
+      }
+      if (ch === "]") {
+        setHistoryResponseBodyScroll((prev) => prev + 1);
       }
       return;
     }
@@ -938,6 +1234,18 @@ export function App() {
           setEditorInput("");
           return;
         }
+        if (key.ctrl && key.name === "v") {
+          appendClipboardText((chunk) => setEditorInput((prev) => `${prev}${chunk}`));
+          return;
+        }
+        if (key.ctrl && key.name === "y") {
+          copyInputToClipboard(editorInput);
+          return;
+        }
+        if (clearInputPressed(key)) {
+          setEditorInput("");
+          return;
+        }
         if (key.name === "enter" || key.name === "return") {
           setEditorDraft((prev) => {
             if (!prev) {
@@ -953,8 +1261,8 @@ export function App() {
           setEditorInput((prev) => prev.slice(0, -1));
           return;
         }
-        if (ch) {
-          setEditorInput((prev) => `${prev}${ch}`);
+        if (inputChunk) {
+          setEditorInput((prev) => `${prev}${inputChunk}`);
         }
         return;
       }
@@ -962,6 +1270,18 @@ export function App() {
       if (editorMode === "COMMAND") {
         if (key.name === "escape") {
           setEditorMode("NORMAL");
+          setEditorCommandInput("");
+          return;
+        }
+        if (key.ctrl && key.name === "v") {
+          appendClipboardText((chunk) => setEditorCommandInput((prev) => `${prev}${chunk}`));
+          return;
+        }
+        if (key.ctrl && key.name === "y") {
+          copyInputToClipboard(editorCommandInput);
+          return;
+        }
+        if (clearInputPressed(key)) {
           setEditorCommandInput("");
           return;
         }
@@ -1002,8 +1322,8 @@ export function App() {
           setEditorCommandInput((prev) => prev.slice(0, -1));
           return;
         }
-        if (ch) {
-          setEditorCommandInput((prev) => `${prev}${ch}`);
+        if (inputChunk) {
+          setEditorCommandInput((prev) => `${prev}${inputChunk}`);
         }
         return;
       }
@@ -1076,6 +1396,25 @@ export function App() {
         setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
+      if (key.ctrl && key.name === "v") {
+        appendClipboardText((chunk) => {
+          setSearchInput((prev) => {
+            const next = `${prev}${chunk}`;
+            setFilter(next);
+            return next;
+          });
+        });
+        return;
+      }
+      if (key.ctrl && key.name === "y") {
+        copyInputToClipboard(searchInput);
+        return;
+      }
+      if (clearInputPressed(key)) {
+        setSearchInput("");
+        setFilter("");
+        return;
+      }
       if (key.name === "enter" || key.name === "return") {
         setMode("NORMAL");
         setStatusInfo(`Filter locked: ${filter || "(none)"}`);
@@ -1089,9 +1428,9 @@ export function App() {
         });
         return;
       }
-      if (ch) {
+      if (inputChunk) {
         setSearchInput((prev) => {
-          const next = `${prev}${ch}`;
+          const next = `${prev}${inputChunk}`;
           setFilter(next);
           return next;
         });
@@ -1106,6 +1445,18 @@ export function App() {
         setStatusInfo(MAIN_IDLE_HINT);
         return;
       }
+      if (key.ctrl && key.name === "v") {
+        appendClipboardText((chunk) => setCommandInput((prev) => `${prev}${chunk}`));
+        return;
+      }
+      if (key.ctrl && key.name === "y") {
+        copyInputToClipboard(commandInput);
+        return;
+      }
+      if (clearInputPressed(key)) {
+        setCommandInput("");
+        return;
+      }
       if (key.name === "enter" || key.name === "return") {
         const cmd = commandInput;
         setCommandInput("");
@@ -1117,8 +1468,8 @@ export function App() {
         setCommandInput((prev) => prev.slice(0, -1));
         return;
       }
-      if (ch) {
-        setCommandInput((prev) => `${prev}${ch}`);
+      if (inputChunk) {
+        setCommandInput((prev) => `${prev}${inputChunk}`);
       }
       return;
     }
@@ -1333,8 +1684,17 @@ export function App() {
   const responseBodyTextWidth = Math.max(18, termWidth - 8);
   const historyListTextWidth = Math.max(1, (showHistoryRight ? historyLeftCols : historyContentCols) - 2);
   const historyListNameWidth = Math.max(1, historyListTextWidth - 15);
-  const historyDetailMetaTextWidth = Math.max(1, historyRightCols - 2);
-  const historyDetailBodyTextWidth = Math.max(12, historyRightCols - 6);
+  const historyDetailMetaTextWidth = Math.max(1, historyRightCols - 4);
+  const historyDetailBodyTextWidth = Math.max(12, historyRightCols - 10);
+  const historyDetailAvailableRows = Math.max(5, contentRows - 3);
+  const historyRequestRows = clamp(
+    Math.round(historyDetailRatio * (historyDetailAvailableRows - 1)),
+    5,
+    Math.max(5, historyDetailAvailableRows - 1 - 4),
+  );
+  const historyResponseRows = Math.max(4, historyDetailAvailableRows - historyRequestRows - 1);
+  const historyRequestBodyRows = Math.max(1, historyRequestRows - 8);
+  const historyResponseBodyRows = Math.max(1, historyResponseRows - 8);
   const editorListTextWidth = Math.max(1, (showEditorRight ? editorLeftCols : editorContentCols) - 2);
   const editorMetaTextWidth = Math.max(1, editorRightCols - 2);
   const editorBodyTextWidth = Math.max(12, editorRightCols - 6);
@@ -1363,12 +1723,37 @@ export function App() {
   const requestBodyVisible = requestBodyVisibleLines.join("\n");
   const responseBodyVisibleLines = bodySliceLines(responseBodyDisplay, responseBodyScroll, responseBodyRows, responseBodyTextWidth);
   const responseBodyVisible = responseBodyVisibleLines.join("\n");
-  const historyDetailVisible = bodySlice(
-    `${selectedRun?.request_snapshot || ""}\n\nresponse body:\n${selectedRun?.response_body || ""}`,
-    historyDetailScroll,
-    220,
+  const parsedHistoryRequest = useMemo(
+    () => parseRequestSnapshot(selectedRun?.request_snapshot || ""),
+    [selectedRun?.id, selectedRun?.request_snapshot],
+  );
+  const historyRequestBodyDisplay = isLikelyJson(parsedHistoryRequest.body)
+    ? (() => {
+        const pretty = maybePrettyJsonBody(parsedHistoryRequest.body);
+        return pretty.ok ? pretty.body : parsedHistoryRequest.body;
+      })()
+    : parsedHistoryRequest.body;
+  const historyResponseBodySource = selectedRun?.response_body || "";
+  const historyResponseBodyDisplay = isLikelyJson(historyResponseBodySource)
+    ? (() => {
+        const pretty = maybePrettyJsonBody(historyResponseBodySource);
+        return pretty.ok ? pretty.body : historyResponseBodySource;
+      })()
+    : historyResponseBodySource;
+  const historyRequestBodyLines = bodySliceLines(
+    historyRequestBodyDisplay,
+    historyRequestBodyScroll,
+    historyRequestBodyRows,
     historyDetailBodyTextWidth,
   );
+  const historyResponseBodyLines = bodySliceLines(
+    historyResponseBodyDisplay,
+    historyResponseBodyScroll,
+    historyResponseBodyRows,
+    historyDetailBodyTextWidth,
+  );
+  const historyRequestBodyVisible = historyRequestBodyLines.join("\n");
+  const historyResponseBodyVisible = historyResponseBodyLines.join("\n");
   const editorBodyVisible = bodySlice(editorDraft?.body || "(empty)", editorBodyScroll, 220, editorBodyTextWidth);
 
   const dividerIdleColor = palette.divider;
@@ -1510,22 +1895,12 @@ export function App() {
                   <text fg={selectedItem ? palette.hint : palette.warn}>{previewStatusLine}</text>
                 </box>
                 <text fg={palette.section}>Body</text>
-                <box key={`preview-body-${selectedItem?.id ?? "none"}`} flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
-                  {previewHasJsonBody ? (
-                    <text>
-                      {requestBodyVisibleLines.map((line, idx) => (
-                        <span key={`preview-json-line-${idx}`} fg={palette.hint}>
-                          {jsonTokens(line).map((token, tokenIdx) => (
-                            <span key={`preview-json-token-${idx}-${tokenIdx}`} fg={token.fg ?? palette.hint}>{token.text}</span>
-                          ))}
-                          {idx < requestBodyVisibleLines.length - 1 ? "\n" : ""}
-                        </span>
-                      ))}
-                    </text>
-                  ) : (
-                    <text fg={palette.hint}>{requestBodyVisible}</text>
-                  )}
-                </box>
+                <BodyPane
+                  keyPrefix={`preview-body-${selectedItem?.id ?? "none"}`}
+                  lines={requestBodyVisibleLines}
+                  visibleText={requestBodyVisible}
+                  hasJson={previewHasJsonBody}
+                />
               </box>
             </box>
           ) : null}
@@ -1601,24 +1976,59 @@ export function App() {
   }
 
   function renderHistoryScreen() {
+    const requestRunAtParts = wrapLabelValue(
+      "run/at:",
+      selectedRun ? `#${selectedRun.id} ${selectedRun.created_at}` : "",
+      historyDetailMetaTextWidth,
+      1,
+    );
+    const requestNameParts = wrapLabelValue("name:", selectedRun?.request_name || "(none)", historyDetailMetaTextWidth, 1);
+    const requestMethodParts = wrapLabelValue("method:", selectedRun?.method || "(none)", historyDetailMetaTextWidth, 1);
+    const requestUrlParts = wrapLabelValue("url:", selectedRun?.url || "(none)", historyDetailMetaTextWidth, 2);
+    const requestUrlContinuation = `${" ".repeat(requestUrlParts.labelWidth)}${requestUrlParts.valueLines[1] || " ".repeat(requestUrlParts.valueWidth)}`;
+    const requestAuthHeaderParts = wrapLabelValue(
+      "auth/header:",
+      `${parsedHistoryRequest.fields.auth || "none"}; ${parsedHistoryRequest.fields.header || "none"}`,
+      historyDetailMetaTextWidth,
+      1,
+    );
+
+    const responseRequestParts = wrapLabelValue(
+      "request:",
+      selectedRun ? `${selectedRun.request_name} (${selectedRun.request_id})` : "",
+      historyDetailMetaTextWidth,
+      1,
+    );
+    const responseMethodParts = wrapLabelValue("method:", selectedRun?.method || "", historyDetailMetaTextWidth, 1);
+    const responseStatusParts = wrapLabelValue("status:", selectedRun ? historyStatusLabel(selectedRun) : "", historyDetailMetaTextWidth, 1);
+    const responseMsParts = wrapLabelValue("ms:", selectedRun ? String(selectedRun.duration_ms || 0) : "", historyDetailMetaTextWidth, 1);
+    const responseErrorParts = wrapLabelValue("error:", selectedRun?.error || "", historyDetailMetaTextWidth, 2);
+    const responseErrorContinuation = `${" ".repeat(responseErrorParts.labelWidth)}${responseErrorParts.valueLines[1] || " ".repeat(responseErrorParts.valueWidth)}`;
+    const responseStatusValueColor = selectedRun ? historyStatusColor(selectedRun) : palette.hint;
+
+    const requestBodyHasJson = isLikelyJson(historyRequestBodyDisplay);
+    const responseBodyHasJson = isLikelyJson(historyResponseBodyDisplay);
+
     return (
       <box flexGrow={1} border borderColor={palette.border} flexDirection="row">
         <box width={showHistoryRight ? historyLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel} flexDirection="column">
           <text fg={palette.section}>History</text>
+          <text fg={palette.hint}>{fitTo(`Filter${historyMode === "SEARCH" ? " (/):" : ":"} ${historyFilter || "(none)"}`, historyListTextWidth)}</text>
           <scrollbox flexGrow={1} marginTop={1} backgroundColor={palette.panel}>
-            {historyRuns.map((run, idx) => {
+            {historyVisible.map((run, idx) => {
               const active = idx === historySelected;
-              const codeColor = run.status_code >= 500 ? palette.error : run.status_code >= 400 ? palette.warn : palette.ok;
+              const statusColor = historyStatusColor(run);
+              const statusBadge = fitTo(historyStatusLabel(run), 5);
               return (
-                <text key={`${run.id}`} fg={active ? palette.ok : palette.hint}>
-                  <span fg={active ? palette.ok : codeColor}>{active ? ">" : " "}</span>
-                  <span fg={active ? palette.ok : methodColor(run.method)}>{run.method.padEnd(6, " ")}</span>
-                  <span> {fitTo(run.request_name || run.request_id, historyListNameWidth)}</span>
-                  <span fg={active ? palette.ok : codeColor}> [{run.status_code}]</span>
+                <text key={`${run.id}`} fg={palette.hint}>
+                  <span fg={active ? palette.selection : palette.hint}>{active ? ">" : " "}</span>
+                  <span fg={methodColor(run.method)}>{run.method.padEnd(6, " ")}</span>
+                  <span fg={active ? palette.selection : palette.hint}> {fitTo(run.request_name || run.request_id, historyListNameWidth)}</span>
+                  <span fg={statusColor}> {statusBadge}</span>
                 </text>
               );
             })}
-            {historyRuns.length === 0 ? <text fg={palette.warn}>No history runs yet.</text> : null}
+            {historyVisible.length === 0 ? <text fg={palette.warn}>No matching history runs.</text> : null}
           </scrollbox>
         </box>
 
@@ -1628,17 +2038,43 @@ export function App() {
           <box width={historyRightCols} paddingX={1} paddingTop={1} backgroundColor={palette.bg} flexDirection="column">
             <text fg={palette.section}>Run Detail</text>
             {selectedRun ? (
-              <box flexDirection="column">
-                <text fg={palette.hint}>{fitTo(`id/at: #${selectedRun.id} ${selectedRun.created_at}`, historyDetailMetaTextWidth)}</text>
-                <text fg={methodColor(selectedRun.method)}>{fitTo(`method: ${selectedRun.method}`, historyDetailMetaTextWidth)}</text>
-                <text fg={palette.hint}>{fitTo(`url: ${selectedRun.url}`, historyDetailMetaTextWidth)}</text>
-                <text fg={palette.hint}>{fitTo(`status/ms: ${selectedRun.status_code} / ${selectedRun.duration_ms}`, historyDetailMetaTextWidth)}</text>
-                {selectedRun.error ? (
-                  <text fg={palette.error}>{fitTo(`error: ${selectedRun.error}`, historyDetailMetaTextWidth)}</text>
-                ) : null}
-                <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
-                  <text fg={palette.hint}>{historyDetailVisible || "(empty)"}</text>
-                </scrollbox>
+              <box marginTop={1} flexDirection="column">
+                <box height={historyRequestRows} border borderColor={palette.border} paddingX={1} backgroundColor={palette.bg} flexDirection="column">
+                  <text fg={palette.section}>Request</text>
+                  <box height={1}><text><span fg={palette.hint}><strong>{requestRunAtParts.label}</strong> </span><span fg={palette.hint}>{requestRunAtParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{requestNameParts.label}</strong> </span><span fg={palette.hint}>{requestNameParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{requestMethodParts.label}</strong> </span><span fg={methodColor(selectedRun.method)}>{requestMethodParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{requestUrlParts.label}</strong> </span><span fg={palette.hint}>{requestUrlParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text fg={palette.hint}>{requestUrlContinuation}</text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{requestAuthHeaderParts.label}</strong> </span><span fg={palette.hint}>{requestAuthHeaderParts.valueLines[0]}</span></text></box>
+                  <text fg={palette.section}>Body</text>
+                  <BodyPane
+                    keyPrefix={`history-req-body-${selectedRun.id}`}
+                    lines={historyRequestBodyLines}
+                    visibleText={historyRequestBodyVisible}
+                    hasJson={requestBodyHasJson}
+                  />
+                </box>
+
+                <box height={1} border={['top']} borderColor={palette.divider} />
+
+                <box height={historyResponseRows} border borderColor={palette.border} paddingX={1} backgroundColor={palette.bg} flexDirection="column">
+                  <text fg={palette.section}>Response</text>
+                  <box height={1}><text><span fg={palette.hint}><strong>{responseRequestParts.label}</strong> </span><span fg={palette.hint}>{responseRequestParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{responseMethodParts.label}</strong> </span><span fg={methodColor(selectedRun.method)}>{responseMethodParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{responseStatusParts.label}</strong> </span><span fg={responseStatusValueColor}>{responseStatusParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={palette.hint}><strong>{responseMsParts.label}</strong> </span><span fg={palette.hint}>{responseMsParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text><span fg={selectedRun.error ? palette.error : palette.hint}><strong>{responseErrorParts.label}</strong> </span><span fg={selectedRun.error ? palette.error : palette.hint}>{responseErrorParts.valueLines[0]}</span></text></box>
+                  <box height={1}><text fg={selectedRun.error ? palette.error : palette.hint}>{responseErrorContinuation}</text></box>
+                  <text fg={palette.section}>Body</text>
+                  <BodyPane
+                    keyPrefix={`history-res-body-${selectedRun.id}`}
+                    lines={historyResponseBodyLines}
+                    visibleText={historyResponseBodyVisible}
+                    hasJson={responseBodyHasJson}
+                    emptyText="(empty)"
+                  />
+                </box>
               </box>
             ) : (
               <text fg={palette.warn}>No run selected.</text>
@@ -1707,8 +2143,9 @@ export function App() {
           <text fg={palette.hint}>Main:</text>
           <text fg={palette.hint}>{trimTo(`  j/k, gg/G, Enter, /, ?, :, d, E, ZZ/ZQ, H/L, K/J, { }, [ ]`, helpTextWidth)}</text>
           <text fg={palette.hint}>{trimTo(`Action: y send, e body edit, a auth editor, Esc/n cancel`, helpTextWidth)}</text>
-          <text fg={palette.hint}>{trimTo(`History: j/k, r replay, H/L, { }, Esc`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`History: j/k, / filter, r replay, H/L split, K/J detail, { } req, [ ] resp, Esc`, helpTextWidth)}</text>
           <text fg={palette.hint}>{trimTo(`Editor: j/k, h/l method, i/Enter edit, :w/:q/:wq, Ctrl+s, Esc`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`Bottom input: Ctrl+v paste, Ctrl+y copy, Ctrl+Backspace/Delete clear`, helpTextWidth)}</text>
           <text fg={palette.hint}>{trimTo(`Press Esc to return.`, helpTextWidth)}</text>
         </scrollbox>
       </box>
@@ -1722,7 +2159,7 @@ export function App() {
     prompt = mainPrompt(mode, commandInput, searchInput, searchPrefix, selectedItem?.name ?? "");
     idleHint = MAIN_IDLE_HINT;
   } else if (screen === "HISTORY") {
-    prompt = HISTORY_IDLE_HINT;
+    prompt = historyMode === "SEARCH" ? `/${historySearchInput}` : HISTORY_IDLE_HINT;
     idleHint = HISTORY_IDLE_HINT;
   } else if (screen === "EDITOR") {
     const currentLabel = EDITOR_FIELDS[editorField]?.label ?? "Field";
@@ -1735,6 +2172,7 @@ export function App() {
 
   const showPrompt =
     (screen === "MAIN" && mode !== "NORMAL") ||
+    (screen === "HISTORY" && historyMode !== "NORMAL") ||
     (screen === "EDITOR" && editorMode !== "NORMAL");
 
   let bottomBarText = idleHint;
