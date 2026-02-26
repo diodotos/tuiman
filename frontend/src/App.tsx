@@ -97,6 +97,114 @@ function trimTo(text: string, width: number): string {
   return `${text.slice(0, Math.max(0, width - 3))}...`;
 }
 
+function fitTo(text: string, width: number): string {
+  const maxWidth = Math.max(1, width);
+  return trimTo(text, maxWidth).padEnd(maxWidth, " ");
+}
+
+function wrapFixedLines(text: string, width: number, maxLines: number): string[] {
+  const effectiveWidth = Math.max(1, width);
+  const effectiveMaxLines = Math.max(1, maxLines);
+  const source = text ?? "";
+  const chunks: string[] = [];
+
+  if (source.length === 0) {
+    chunks.push(" ".repeat(effectiveWidth));
+  } else {
+    for (let i = 0; i < source.length; i += effectiveWidth) {
+      chunks.push(source.slice(i, i + effectiveWidth).padEnd(effectiveWidth, " "));
+    }
+  }
+
+  const window = chunks.slice(0, effectiveMaxLines);
+  while (window.length < effectiveMaxLines) {
+    window.push(" ".repeat(effectiveWidth));
+  }
+  return window;
+}
+
+function wrapLabelValue(label: string, value: string, totalWidth: number, maxLines: number): {
+  label: string;
+  labelWidth: number;
+  valueWidth: number;
+  valueLines: string[];
+} {
+  const labelWidth = `${label} `.length;
+  const valueWidth = Math.max(1, totalWidth - labelWidth);
+  return {
+    label,
+    labelWidth,
+    valueWidth,
+    valueLines: wrapFixedLines(value, valueWidth, maxLines),
+  };
+}
+
+function isLikelyJson(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function responseStatusColor(statusCode?: number): string {
+  if (typeof statusCode !== "number") {
+    return palette.hint;
+  }
+  if (statusCode >= 500) {
+    return palette.error;
+  }
+  if (statusCode >= 400) {
+    return palette.warn;
+  }
+  if (statusCode >= 300) {
+    return palette.section;
+  }
+  if (statusCode >= 200) {
+    return palette.ok;
+  }
+  return palette.hint;
+}
+
+type JsonToken = { text: string; fg?: string };
+
+function jsonTokens(line: string): JsonToken[] {
+  const tokens: JsonToken[] = [];
+  const re = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\btrue\b|\bfalse\b|\bnull\b|[{}\[\],:]/g;
+  let cursor = 0;
+
+  for (const match of line.matchAll(re)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (start > cursor) {
+      tokens.push({ text: line.slice(cursor, start) });
+    }
+
+    const t = match[0];
+    if ((t.startsWith("{") || t.startsWith("[") || t.startsWith("}") || t.startsWith("]"))) {
+      tokens.push({ text: t, fg: palette.section });
+    } else if (/^"(?:\\.|[^"\\])*"$/.test(t) && line.slice(end).trimStart().startsWith(":")) {
+      tokens.push({ text: t, fg: palette.section });
+    } else if (t.startsWith('"')) {
+      tokens.push({ text: t, fg: palette.jsonString });
+    } else if (/^(true|false|null)$/.test(t)) {
+      tokens.push({ text: t, fg: palette.warn });
+    } else if (/^-?\d/.test(t)) {
+      tokens.push({ text: t, fg: palette.warn });
+    } else {
+      tokens.push({ text: t });
+    }
+
+    cursor = end;
+  }
+
+  if (cursor < line.length) {
+    tokens.push({ text: line.slice(cursor) });
+  }
+
+  if (tokens.length === 0) {
+    tokens.push({ text: line });
+  }
+  return tokens;
+}
+
 function printableChar(key: { sequence?: string; ctrl?: boolean; meta?: boolean; option?: boolean }): string | null {
   if (key.ctrl || key.meta || key.option) {
     return null;
@@ -116,27 +224,36 @@ function backspacePressed(key: { name?: string; sequence?: string }): boolean {
   return key.name === "backspace" || key.sequence === "\x7f";
 }
 
-function bodySlice(text: string, offset: number, maxLines: number, wrapWidth: number): string {
+function bodySliceLines(text: string, offset: number, maxLines: number, wrapWidth: number): string[] {
   const effectiveWidth = Math.max(1, wrapWidth);
+  const effectiveMaxLines = Math.max(1, maxLines);
   const rawLines = text.split(/\r?\n/);
   const wrappedLines: string[] = [];
 
   for (const rawLine of rawLines) {
     if (rawLine.length === 0) {
-      wrappedLines.push("");
+      wrappedLines.push(" ".repeat(effectiveWidth));
       continue;
     }
     for (let i = 0; i < rawLine.length; i += effectiveWidth) {
-      wrappedLines.push(rawLine.slice(i, i + effectiveWidth));
+      wrappedLines.push(rawLine.slice(i, i + effectiveWidth).padEnd(effectiveWidth, " "));
     }
   }
 
   if (wrappedLines.length === 0) {
-    return "";
+    return Array.from({ length: effectiveMaxLines }, () => " ".repeat(effectiveWidth));
   }
 
   const start = Math.max(0, Math.min(offset, wrappedLines.length - 1));
-  return wrappedLines.slice(start, start + maxLines).join("\n");
+  const window = wrappedLines.slice(start, start + effectiveMaxLines);
+  while (window.length < effectiveMaxLines) {
+    window.push(" ".repeat(effectiveWidth));
+  }
+  return window;
+}
+
+function bodySlice(text: string, offset: number, maxLines: number, wrapWidth: number): string {
+  return bodySliceLines(text, offset, maxLines, wrapWidth).join("\n");
 }
 
 function nowIsoNoMillis(): string {
@@ -1204,21 +1321,37 @@ export function App() {
   const editorLeftCols = clamp(Math.round(editorSplitRatio * termWidth), EDITOR_MIN_LEFT_COLS, editorMaxLeftCols);
   const editorRightCols = Math.max(EDITOR_MIN_RIGHT_COLS, termWidth - editorLeftCols - 1);
 
-  const requestListTextWidth = Math.max(12, (showMainRight ? mainLeftCols : termWidth) - 4);
-  const requestPreviewTextWidth = Math.max(12, mainRightCols - 5);
-  const responsePaneTextWidth = Math.max(18, termWidth - 6);
-  const responseBodyTextWidth = Math.max(18, termWidth - 8);
-  const historyDetailTextWidth = Math.max(12, historyRightCols - 6);
-  const editorMetaTextWidth = Math.max(12, editorRightCols - 4);
-  const editorBodyTextWidth = Math.max(12, editorRightCols - 6);
+  const mainContentCols = Math.max(1, termWidth - 2);
+  const historyContentCols = Math.max(1, termWidth - 2);
+  const editorContentCols = Math.max(1, termWidth - 2);
 
-  const requestBodyVisible = bodySlice(selectedItem?.body || "(empty)", requestBodyScroll, 220, requestPreviewTextWidth);
-  const responseBodyVisible = bodySlice(lastResponse?.body || "", responseBodyScroll, 220, responseBodyTextWidth);
+  const requestListTextWidth = Math.max(1, (showMainRight ? mainLeftCols : mainContentCols) - 2);
+  const requestListNameWidth = Math.max(1, requestListTextWidth - 8);
+  const requestPreviewMetaTextWidth = Math.max(1, mainRightCols - 2);
+  const requestPreviewBodyTextWidth = Math.max(1, mainRightCols - 6);
+  const responsePaneTextWidth = Math.max(1, termWidth - 4);
+  const responseBodyTextWidth = Math.max(18, termWidth - 8);
+  const historyListTextWidth = Math.max(1, (showHistoryRight ? historyLeftCols : historyContentCols) - 2);
+  const historyListNameWidth = Math.max(1, historyListTextWidth - 15);
+  const historyDetailMetaTextWidth = Math.max(1, historyRightCols - 2);
+  const historyDetailBodyTextWidth = Math.max(12, historyRightCols - 6);
+  const editorListTextWidth = Math.max(1, (showEditorRight ? editorLeftCols : editorContentCols) - 2);
+  const editorMetaTextWidth = Math.max(1, editorRightCols - 2);
+  const editorBodyTextWidth = Math.max(12, editorRightCols - 6);
+  const helpTextWidth = Math.max(24, termWidth - 4);
+
+  const requestBodyRows = Math.max(1, topRows - 9);
+  const responseBodyRows = Math.max(1, responseRows - 11);
+
+  const requestBodyVisibleLines = bodySliceLines(selectedItem?.body || "(empty)", requestBodyScroll, requestBodyRows, requestPreviewBodyTextWidth);
+  const requestBodyVisible = requestBodyVisibleLines.join("\n");
+  const responseBodyVisibleLines = bodySliceLines(lastResponse?.body || "", responseBodyScroll, responseBodyRows, responseBodyTextWidth);
+  const responseBodyVisible = responseBodyVisibleLines.join("\n");
   const historyDetailVisible = bodySlice(
     `${selectedRun?.request_snapshot || ""}\n\nresponse body:\n${selectedRun?.response_body || ""}`,
     historyDetailScroll,
     220,
-    historyDetailTextWidth,
+    historyDetailBodyTextWidth,
   );
   const editorBodyVisible = bodySlice(editorDraft?.body || "(empty)", editorBodyScroll, 220, editorBodyTextWidth);
 
@@ -1269,25 +1402,58 @@ export function App() {
   }
 
   function renderMainScreen() {
+    const listRows = Math.max(1, topRows - 4);
+    const listStart = clamp(selected - Math.floor(listRows / 2), 0, Math.max(0, visible.length - listRows));
+    const listWindow = visible.slice(listStart, listStart + listRows);
+    const listDisplayCount = visible.length === 0 ? 1 : listWindow.length;
+    const listPadRows = Math.max(0, listRows - listDisplayCount);
+
+    const previewNameParts = wrapLabelValue("name:", selectedItem?.name || "(none)", requestPreviewMetaTextWidth, 1);
+    const previewMethodParts = wrapLabelValue("method:", selectedItem?.method || "(none)", requestPreviewMetaTextWidth, 1);
+    const previewUrlParts = wrapLabelValue("url:", selectedItem?.url || "(none)", requestPreviewMetaTextWidth, 2);
+    const previewStatusLine = fitTo(selectedItem ? "" : "No request selected.", requestPreviewMetaTextWidth);
+    const previewUrlContinuation = `${" ".repeat(previewUrlParts.labelWidth)}${previewUrlParts.valueLines[1] || " ".repeat(previewUrlParts.valueWidth)}`;
+    const previewHasJsonBody = Boolean(selectedItem && isLikelyJson(selectedItem.body));
+
+    const responseRequestParts = wrapLabelValue(
+      "request:",
+      lastResponse ? `${lastResponse.requestName} (${lastResponse.requestId})` : "",
+      responsePaneTextWidth,
+      1,
+    );
+    const responseMethodParts = wrapLabelValue("method:", lastResponse?.method || "", responsePaneTextWidth, 1);
+    const responseUrlParts = wrapLabelValue("url:", lastResponse?.url || "", responsePaneTextWidth, 2);
+    const responseAtParts = wrapLabelValue("at:", lastResponse?.at || "", responsePaneTextWidth, 1);
+    const responseStatusParts = wrapLabelValue("status:", lastResponse ? String(lastResponse.statusCode) : "", responsePaneTextWidth, 1);
+    const responseMsParts = wrapLabelValue("ms:", lastResponse ? String(lastResponse.durationMs) : "", responsePaneTextWidth, 1);
+    const statusValueColor = responseStatusColor(lastResponse?.statusCode);
+    const responseErrorParts = wrapLabelValue("error:", lastResponse?.error || "", responsePaneTextWidth, 1);
+    const responseUrlContinuation = `${" ".repeat(responseUrlParts.labelWidth)}${responseUrlParts.valueLines[1] || " ".repeat(responseUrlParts.valueWidth)}`;
+    const responseEmptyLine = fitTo("No response yet. Select a request, press Enter, then y.", responsePaneTextWidth);
+
     return (
       <box flexGrow={1} flexDirection="column" border borderColor={palette.border}>
         <box height={topRows} flexDirection="row">
-          <box width={showMainRight ? mainLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+          <box width={showMainRight ? mainLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel} flexDirection="column">
             <text fg={palette.section}>Requests</text>
-            <text fg={palette.hint}>{trimTo(`Filter: ${filter || "(none)"}`, requestListTextWidth)}</text>
-            <scrollbox flexGrow={1} marginTop={1}>
-              {visible.map((req, idx) => {
+            <text fg={palette.hint}>{fitTo(`Filter: ${filter || "(none)"}`, requestListTextWidth)}</text>
+            <box key={`req-list-${visible.length}-${selected}`} flexGrow={1} marginTop={1} backgroundColor={palette.panel} flexDirection="column">
+              {visible.length === 0 ? <text fg={palette.warn}>{fitTo("No matching requests.", requestListTextWidth)}</text> : null}
+              {listWindow.map((req, localIdx) => {
+                const idx = listStart + localIdx;
                 const active = idx === selected;
                 return (
-                  <text key={req.id} fg={active ? palette.ok : palette.hint}>
-                    <span fg={active ? palette.ok : methodColor(req.method)}>{active ? ">" : " "}</span>
-                    <span fg={active ? palette.ok : methodColor(req.method)}>{req.method.padEnd(6, " ")}</span>
-                    <span> {trimTo(req.name, 36)}</span>
+                  <text key={req.id} fg={palette.hint}>
+                    <span fg={active ? palette.selection : palette.hint}>{active ? ">" : " "}</span>
+                    <span fg={methodColor(req.method)}>{req.method.padEnd(6, " ")}</span>
+                    <span fg={active ? palette.selection : palette.hint}> {fitTo(req.name, requestListNameWidth)}</span>
                   </text>
                 );
               })}
-              {visible.length === 0 ? <text fg={palette.warn}>No matching requests.</text> : null}
-            </scrollbox>
+              {Array.from({ length: listPadRows }).map((_, idx) => (
+                <text key={`main-list-pad-${idx}`} fg={palette.hint}>{fitTo("", requestListTextWidth)}</text>
+              ))}
+            </box>
           </box>
 
           {showMainRight ? (
@@ -1300,21 +1466,50 @@ export function App() {
           ) : null}
 
           {showMainRight ? (
-            <box width={mainRightCols} paddingX={1} paddingTop={1}>
+            <box width={mainRightCols} paddingX={1} paddingTop={1} backgroundColor={palette.bg} flexDirection="column">
               <text fg={palette.section}>Request Preview</text>
-              {selectedItem ? (
-                <box marginTop={1} flexDirection="column" gap={0}>
-                  <text fg={palette.hint}>{trimTo(`name: ${selectedItem.name}`, requestPreviewTextWidth)}</text>
-                  <text fg={methodColor(selectedItem.method)}>{trimTo(`method: ${selectedItem.method}`, requestPreviewTextWidth)}</text>
-                  <text fg={palette.hint}>{trimTo(`url: ${selectedItem.url}`, requestPreviewTextWidth)}</text>
-                  <text fg={palette.section}>Body</text>
-                  <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
-                    <text fg={palette.hint}>{requestBodyVisible}</text>
-                  </scrollbox>
+              <box key={`preview-${selectedItem?.id ?? "none"}`} marginTop={1} flexDirection="column" gap={0}>
+                <box height={1} backgroundColor={palette.bg}>
+                  <text>
+                    <span fg={palette.hint}><strong>{previewNameParts.label}</strong> </span>
+                    <span fg={palette.hint}>{previewNameParts.valueLines[0]}</span>
+                  </text>
                 </box>
-              ) : (
-                <text fg={palette.warn}>No request selected.</text>
-              )}
+                <box height={1} backgroundColor={palette.bg}>
+                  <text>
+                    <span fg={palette.hint}><strong>{previewMethodParts.label}</strong> </span>
+                    <span fg={selectedItem ? methodColor(selectedItem.method) : palette.hint}>{previewMethodParts.valueLines[0]}</span>
+                  </text>
+                </box>
+                <box height={1} backgroundColor={palette.bg}>
+                  <text>
+                    <span fg={palette.hint}><strong>{previewUrlParts.label}</strong> </span>
+                    <span fg={palette.hint}>{previewUrlParts.valueLines[0]}</span>
+                  </text>
+                </box>
+                <box height={1} backgroundColor={palette.bg}>
+                  <text fg={palette.hint}>{previewUrlContinuation}</text>
+                </box>
+                <box height={1} backgroundColor={palette.bg}>
+                  <text fg={selectedItem ? palette.hint : palette.warn}>{previewStatusLine}</text>
+                </box>
+                <text fg={palette.section}>Body</text>
+                <box key={`preview-body-${selectedItem?.id ?? "none"}`} flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
+                  {previewHasJsonBody ? (
+                    <box flexDirection="column">
+                      {requestBodyVisibleLines.map((line, idx) => (
+                        <text key={`preview-json-line-${idx}`}>
+                          {jsonTokens(line).map((token, tokenIdx) => (
+                            <span key={`preview-json-token-${idx}-${tokenIdx}`} fg={token.fg ?? palette.hint}>{token.text}</span>
+                          ))}
+                        </text>
+                      ))}
+                    </box>
+                  ) : (
+                    <text fg={palette.hint}>{requestBodyVisible}</text>
+                  )}
+                </box>
+              </box>
             </box>
           ) : null}
         </box>
@@ -1326,25 +1521,63 @@ export function App() {
           onMouseDown={(event) => beginDrag("MAIN_HORIZONTAL", event)}
         />
 
-        <box height={responseRows} paddingX={1} paddingTop={1}>
+        <box height={responseRows} paddingX={1} paddingTop={1} backgroundColor={palette.bg} flexDirection="column">
           <text fg={palette.section}>Response</text>
-          {lastResponse ? (
-            <box flexDirection="column">
-              <text fg={palette.hint}>{trimTo(`request: ${lastResponse.requestName} (${lastResponse.requestId})`, responsePaneTextWidth)}</text>
-              <text fg={methodColor(lastResponse.method)}>{trimTo(`method: ${lastResponse.method}`, responsePaneTextWidth)}</text>
-              <text fg={palette.hint}>{trimTo(`url: ${lastResponse.url}`, responsePaneTextWidth)}</text>
-              <text fg={palette.hint}>{trimTo(`at/status/ms: ${lastResponse.at} / ${lastResponse.statusCode} / ${lastResponse.durationMs}`, responsePaneTextWidth)}</text>
-              {lastResponse.error ? (
-                <text fg={palette.error}>{trimTo(`error: ${lastResponse.error}`, responsePaneTextWidth)}</text>
-              ) : null}
-              <text fg={palette.section}>Body</text>
-              <scrollbox flexGrow={1} marginBottom={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
-                <text fg={palette.hint}>{responseBodyVisible || "(empty)"}</text>
-              </scrollbox>
+          <box flexDirection="column">
+            <box height={1} backgroundColor={palette.bg}>
+              {lastResponse ? (
+                <text>
+                  <span fg={palette.hint}><strong>{responseRequestParts.label}</strong> </span>
+                  <span fg={palette.hint}>{responseRequestParts.valueLines[0]}</span>
+                </text>
+              ) : (
+                <text fg={palette.hint}>{responseEmptyLine}</text>
+              )}
             </box>
-          ) : (
-            <text fg={palette.hint}>No response yet. Select a request, press Enter, then y.</text>
-          )}
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={palette.hint}><strong>{responseMethodParts.label}</strong> </span>
+                <span fg={lastResponse ? methodColor(lastResponse.method) : palette.hint}>{responseMethodParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={palette.hint}><strong>{responseUrlParts.label}</strong> </span>
+                <span fg={palette.hint}>{responseUrlParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text fg={palette.hint}>{responseUrlContinuation}</text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={palette.hint}><strong>{responseAtParts.label}</strong> </span>
+                <span fg={palette.hint}>{responseAtParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={palette.hint}><strong>{responseStatusParts.label}</strong> </span>
+                <span fg={statusValueColor}>{responseStatusParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={palette.hint}><strong>{responseMsParts.label}</strong> </span>
+                <span fg={palette.hint}>{responseMsParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <box height={1} backgroundColor={palette.bg}>
+              <text>
+                <span fg={lastResponse?.error ? palette.error : palette.hint}><strong>{responseErrorParts.label}</strong> </span>
+                <span fg={lastResponse?.error ? palette.error : palette.hint}>{responseErrorParts.valueLines[0]}</span>
+              </text>
+            </box>
+            <text fg={palette.section}>Body</text>
+            <box flexGrow={1} marginBottom={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
+              <text fg={palette.hint}>{lastResponse ? responseBodyVisible || "(empty)" : "(empty)"}</text>
+            </box>
+          </box>
         </box>
       </box>
     );
@@ -1353,9 +1586,9 @@ export function App() {
   function renderHistoryScreen() {
     return (
       <box flexGrow={1} border borderColor={palette.border} flexDirection="row">
-        <box width={showHistoryRight ? historyLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+        <box width={showHistoryRight ? historyLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel} flexDirection="column">
           <text fg={palette.section}>History</text>
-          <scrollbox flexGrow={1} marginTop={1}>
+          <scrollbox flexGrow={1} marginTop={1} backgroundColor={palette.panel}>
             {historyRuns.map((run, idx) => {
               const active = idx === historySelected;
               const codeColor = run.status_code >= 500 ? palette.error : run.status_code >= 400 ? palette.warn : palette.ok;
@@ -1363,7 +1596,7 @@ export function App() {
                 <text key={`${run.id}`} fg={active ? palette.ok : palette.hint}>
                   <span fg={active ? palette.ok : codeColor}>{active ? ">" : " "}</span>
                   <span fg={active ? palette.ok : methodColor(run.method)}>{run.method.padEnd(6, " ")}</span>
-                  <span> {trimTo(run.request_name || run.request_id, 28)}</span>
+                  <span> {fitTo(run.request_name || run.request_id, historyListNameWidth)}</span>
                   <span fg={active ? palette.ok : codeColor}> [{run.status_code}]</span>
                 </text>
               );
@@ -1375,18 +1608,18 @@ export function App() {
         {showHistoryRight ? <box width={1} border={["left"]} borderColor={historyVerticalDividerColor} onMouseDown={(event) => beginDrag("HISTORY_VERTICAL", event)} /> : null}
 
         {showHistoryRight ? (
-          <box width={historyRightCols} paddingX={1} paddingTop={1}>
+          <box width={historyRightCols} paddingX={1} paddingTop={1} backgroundColor={palette.bg} flexDirection="column">
             <text fg={palette.section}>Run Detail</text>
             {selectedRun ? (
               <box flexDirection="column">
-                <text fg={palette.hint}>{trimTo(`id/at: #${selectedRun.id} ${selectedRun.created_at}`, historyDetailTextWidth)}</text>
-                <text fg={methodColor(selectedRun.method)}>{trimTo(`method: ${selectedRun.method}`, historyDetailTextWidth)}</text>
-                <text fg={palette.hint}>{trimTo(`url: ${selectedRun.url}`, historyDetailTextWidth)}</text>
-                <text fg={palette.hint}>{trimTo(`status/ms: ${selectedRun.status_code} / ${selectedRun.duration_ms}`, historyDetailTextWidth)}</text>
+                <text fg={palette.hint}>{fitTo(`id/at: #${selectedRun.id} ${selectedRun.created_at}`, historyDetailMetaTextWidth)}</text>
+                <text fg={methodColor(selectedRun.method)}>{fitTo(`method: ${selectedRun.method}`, historyDetailMetaTextWidth)}</text>
+                <text fg={palette.hint}>{fitTo(`url: ${selectedRun.url}`, historyDetailMetaTextWidth)}</text>
+                <text fg={palette.hint}>{fitTo(`status/ms: ${selectedRun.status_code} / ${selectedRun.duration_ms}`, historyDetailMetaTextWidth)}</text>
                 {selectedRun.error ? (
-                  <text fg={palette.error}>{trimTo(`error: ${selectedRun.error}`, historyDetailTextWidth)}</text>
+                  <text fg={palette.error}>{fitTo(`error: ${selectedRun.error}`, historyDetailMetaTextWidth)}</text>
                 ) : null}
-                <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
+                <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
                   <text fg={palette.hint}>{historyDetailVisible || "(empty)"}</text>
                 </scrollbox>
               </box>
@@ -1404,18 +1637,20 @@ export function App() {
     const currentField = EDITOR_FIELDS[editorField];
     return (
       <box flexGrow={1} border borderColor={palette.border} flexDirection="row">
-        <box width={showEditorRight ? editorLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel}>
+        <box width={showEditorRight ? editorLeftCols : "100%"} paddingX={1} paddingTop={1} backgroundColor={palette.panel} flexDirection="column">
           <text fg={palette.section}>Editor</text>
           {draft ? (
-            <scrollbox flexGrow={1} marginTop={1}>
+            <scrollbox flexGrow={1} marginTop={1} backgroundColor={palette.panel}>
               {EDITOR_FIELDS.map((field, idx) => {
                 const active = idx === editorField;
                 const value = requestFieldValue(draft, field.key);
+                const labelPrefix = `${active ? "> " : "  "}${field.label}: `;
+                const fieldValueWidth = Math.max(1, editorListTextWidth - labelPrefix.length);
                 return (
                   <text key={field.key} fg={active ? palette.ok : palette.hint}>
                     <span fg={active ? palette.ok : palette.section}>{active ? "> " : "  "}{field.label}: </span>
                     <span fg={field.key === "method" ? methodColor(value) : active ? palette.ok : palette.hint}>
-                      {trimTo(value || "(empty)", 50)}
+                      {fitTo(value || "(empty)", fieldValueWidth)}
                     </span>
                   </text>
                 );
@@ -1429,18 +1664,18 @@ export function App() {
         {showEditorRight ? <box width={1} border={["left"]} borderColor={editorVerticalDividerColor} onMouseDown={(event) => beginDrag("EDITOR_VERTICAL", event)} /> : null}
 
         {showEditorRight && draft ? (
-          <box width={editorRightCols} paddingX={1} paddingTop={1}>
+          <box width={editorRightCols} paddingX={1} paddingTop={1} backgroundColor={palette.bg} flexDirection="column">
             <text fg={palette.section}>Preview</text>
             <box marginTop={1} flexDirection="column">
-              <text fg={palette.hint}>{trimTo(`name: ${draft.name || "(empty)"}`, editorMetaTextWidth)}</text>
-              <text fg={methodColor(draft.method)}>{trimTo(`method: ${draft.method}`, editorMetaTextWidth)}</text>
-              <text fg={palette.hint}>{trimTo(`url: ${draft.url || "(empty)"}`, editorMetaTextWidth)}</text>
+              <text fg={palette.hint}>{fitTo(`name: ${draft.name || "(empty)"}`, editorMetaTextWidth)}</text>
+              <text fg={methodColor(draft.method)}>{fitTo(`method: ${draft.method}`, editorMetaTextWidth)}</text>
+              <text fg={palette.hint}>{fitTo(`url: ${draft.url || "(empty)"}`, editorMetaTextWidth)}</text>
               <text fg={palette.section}>Body</text>
-              <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0}>
+              <scrollbox flexGrow={1} border borderColor={palette.border} paddingX={1} paddingY={0} backgroundColor={palette.bg}>
                 <text fg={palette.hint}>{editorBodyVisible}</text>
               </scrollbox>
             </box>
-            <text fg={palette.hint}>{trimTo(`Field: ${currentField.label}`, editorMetaTextWidth)}</text>
+            <text fg={palette.hint}>{fitTo(`Field: ${currentField.label}`, editorMetaTextWidth)}</text>
           </box>
         ) : null}
       </box>
@@ -1453,11 +1688,11 @@ export function App() {
         <text fg={palette.section}>Help</text>
         <scrollbox flexGrow={1} marginTop={1}>
           <text fg={palette.hint}>Main:</text>
-          <text fg={palette.hint}>  j/k, gg/G, Enter, /, ?, :, d, E, ZZ/ZQ, H/L, K/J, {'{'} {'}'}, [ ]</text>
-          <text fg={palette.hint}>Action: y send, e body edit, a auth editor, Esc/n cancel</text>
-          <text fg={palette.hint}>History: j/k, r replay, H/L, {'{'} {'}'}, Esc</text>
-          <text fg={palette.hint}>Editor: j/k, h/l method, i/Enter edit, :w/:q/:wq, Ctrl+s, Esc</text>
-          <text fg={palette.hint}>Press Esc to return.</text>
+          <text fg={palette.hint}>{trimTo(`  j/k, gg/G, Enter, /, ?, :, d, E, ZZ/ZQ, H/L, K/J, { }, [ ]`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`Action: y send, e body edit, a auth editor, Esc/n cancel`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`History: j/k, r replay, H/L, { }, Esc`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`Editor: j/k, h/l method, i/Enter edit, :w/:q/:wq, Ctrl+s, Esc`, helpTextWidth)}</text>
+          <text fg={palette.hint}>{trimTo(`Press Esc to return.`, helpTextWidth)}</text>
         </scrollbox>
       </box>
     );
@@ -1519,7 +1754,7 @@ export function App() {
       {screen === "HELP" ? renderHelpScreen() : null}
 
       <box height={1} paddingX={1} backgroundColor={palette.panelSoft}>
-        <text fg={statusIsError ? palette.error : palette.hint}>{trimTo(bottomBarText, Math.max(1, termWidth - 2))}</text>
+        <text fg={statusIsError ? palette.error : palette.hint}>{fitTo(bottomBarText, Math.max(1, termWidth - 2))}</text>
       </box>
     </box>
   );
